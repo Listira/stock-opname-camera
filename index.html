@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f17">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Snap & Name — Stock Opname</title>
+<link rel="manifest" href="manifest.json">
+<style>
+  :root{
+    --bg:#0b0f17; --panel:#151b27; --line:#26304a;
+    --txt:#e9eef7; --muted:#8a97b1; --accent:#2f80ed; --ok:#27c093; --danger:#e0524b;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+  #app{position:fixed;inset:0;display:flex;flex-direction:column}
+
+  /* ---- Camera stage ---- */
+  #stage{position:relative;flex:1;background:#000;overflow:hidden}
+  #video,#shot{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  #shot{display:none}
+
+  /* Top bar */
+  #topbar{position:absolute;top:0;left:0;right:0;z-index:5;display:flex;
+    justify-content:space-between;align-items:center;padding:14px 16px;
+    padding-top:max(14px,env(safe-area-inset-top));
+    background:linear-gradient(#000a,transparent)}
+  .pill{background:#0009;backdrop-filter:blur(6px);border:1px solid #ffffff22;
+    border-radius:999px;padding:7px 13px;font-size:13px;font-weight:600;display:flex;
+    align-items:center;gap:7px}
+  .pill b{color:var(--ok)}
+  .iconbtn{width:42px;height:42px;border-radius:50%;background:#0009;border:1px solid #ffffff22;
+    color:#fff;font-size:19px;display:flex;align-items:center;justify-content:center}
+  .iconbtn:active{transform:scale(.92)}
+  .iconbtn.on{background:#f4c84a;color:#000;border-color:#f4c84a}
+
+  /* Shutter row */
+  #shutterRow{position:absolute;bottom:0;left:0;right:0;z-index:5;display:flex;
+    align-items:center;justify-content:space-around;
+    padding:0 24px 26px;padding-bottom:max(26px,env(safe-area-inset-bottom));
+    background:linear-gradient(transparent,#000c)}
+  #shutter{width:78px;height:78px;border-radius:50%;background:#fff;border:5px solid #ffffff55;
+    box-shadow:0 0 0 3px #000}
+  #shutter:active{transform:scale(.9)}
+  .side{width:52px;height:52px}
+
+  /* Flash anim */
+  #flash{position:absolute;inset:0;background:#fff;opacity:0;z-index:8;pointer-events:none}
+  #flash.fire{animation:fl .22s ease-out}
+  @keyframes fl{0%{opacity:.85}100%{opacity:0}}
+
+  /* Toast */
+  #toast{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) scale(.8);
+    z-index:9;background:#000c;border:1px solid #ffffff22;border-radius:14px;padding:14px 20px;
+    font-weight:700;opacity:0;pointer-events:none;transition:.18s}
+  #toast.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+
+  /* ---- Name sheet ---- */
+  #sheet{position:absolute;inset:0;z-index:20;display:none;flex-direction:column;
+    background:#000c;backdrop-filter:blur(3px)}
+  #sheet.open{display:flex}
+  #sheetPreview{flex:1;min-height:0;background-size:contain;background-repeat:no-repeat;
+    background-position:center;margin:14px;border-radius:14px}
+  #sheetBox{background:var(--panel);border-top:1px solid var(--line);
+    border-radius:20px 20px 0 0;padding:18px 18px;
+    padding-bottom:max(18px,env(safe-area-inset-bottom))}
+  #sheetBox label{font-size:13px;color:var(--muted);font-weight:600}
+  .inrow{display:flex;gap:10px;margin-top:8px;align-items:stretch}
+  #nameInput{flex:1;background:#0e1320;border:1.5px solid var(--line);border-radius:12px;
+    color:var(--txt);font-size:18px;padding:14px 14px;outline:none}
+  #nameInput:focus{border-color:var(--accent)}
+  .ext{display:flex;align-items:center;color:var(--muted);font-size:15px;padding:0 4px}
+  #suggestRow{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .chip{background:#0e1320;border:1px solid var(--line);color:var(--txt);font-size:13px;
+    padding:8px 12px;border-radius:999px}
+  .chip:active{background:var(--accent)}
+  .btnrow{display:flex;gap:10px;margin-top:16px}
+  .btn{flex:1;border:none;border-radius:13px;padding:16px;font-size:16px;font-weight:700;color:#fff}
+  .btn.save{background:var(--accent)}
+  .btn.retake{background:#2a3346;flex:0 0 110px}
+  .btn:active{transform:scale(.97)}
+
+  /* Start overlay */
+  #start{position:absolute;inset:0;z-index:30;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:18px;background:var(--bg);text-align:center;padding:24px}
+  #start h1{margin:0;font-size:23px}
+  #start p{margin:0;color:var(--muted);max-width:300px;line-height:1.5;font-size:14px}
+  #startBtn{background:var(--accent);border:none;color:#fff;font-size:17px;font-weight:700;
+    padding:16px 30px;border-radius:14px}
+  .logo{font-size:46px}
+  .err{color:var(--danger);font-size:13px;max-width:300px}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="shot" hidden></canvas>
+    <div id="flash"></div>
+    <div id="toast"></div>
+
+    <div id="topbar">
+      <div class="pill">📸 Sesi: <b id="count">0</b><span id="limit"></span></div>
+      <div style="display:flex;gap:10px">
+        <button class="iconbtn" id="torchBtn" title="Senter">🔦</button>
+        <button class="iconbtn" id="flipBtn" title="Ganti kamera">🔄</button>
+      </div>
+    </div>
+
+    <div id="shutterRow">
+      <div class="side"></div>
+      <button id="shutter" aria-label="Jepret"></button>
+      <div class="side"></div>
+    </div>
+  </div>
+
+  <!-- Name sheet -->
+  <div id="sheet">
+    <div id="sheetPreview"></div>
+    <div id="sheetBox">
+      <label>Nama file aset</label>
+      <div class="inrow">
+        <input id="nameInput" type="text" placeholder="cth: Laptop-Acer-Gudang-A"
+               autocomplete="off" autocapitalize="off" spellcheck="false">
+        <span class="ext">.jpg</span>
+      </div>
+      <div id="suggestRow"></div>
+      <div class="btnrow">
+        <button class="btn retake" id="retakeBtn">↩ Ulang</button>
+        <button class="btn save" id="saveBtn">Simpan ✓</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Start overlay -->
+  <div id="start">
+    <div class="logo">📷</div>
+    <h1>Snap &amp; Name</h1>
+    <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.</p>
+    <button id="startBtn">Nyalakan Kamera</button>
+    <div class="err" id="startErr"></div>
+    <div id="demoNote" style="color:#f4c84a;font-size:13px;max-width:300px"></div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const video=$('#video'), shot=$('#shot'), sheet=$('#sheet'),
+      preview=$('#sheetPreview'), nameInput=$('#nameInput'),
+      countEl=$('#count'), toast=$('#toast'), flash=$('#flash'),
+      limitEl=$('#limit'), demoNote=$('#demoNote');
+
+// ----- Mode DEMO -----
+// APK (ada jembatan AndroidSaver) -> versi penuh, UNLIMITED.
+// Web demo di GitHub Pages (*.github.io) -> dibatasi DAILY_LIMIT foto/hari.
+// (localhost/file:// dianggap penuh, biar tes & pemakaian lokal ga kebatasi.)
+const DAILY_LIMIT = 10;
+function isDemo(){
+  if(window.AndroidSaver && window.AndroidSaver.savePhoto) return false;
+  return window.__DEMO===true || location.hostname.endsWith('github.io');
+}
+const DEMO = isDemo();
+
+let stream=null, facing='environment', torchOn=false, track=null;
+let lastBlobUrl=null, lastBlob=null, count=0;
+let usedNames=new Set();   // anti-duplikat nama dalam 1 sesi
+let dupCount=new Map();    // hitungan terakhir per nama -> dedupe O(1)
+let blobReady=false;       // true kalau blob foto SAAT INI sudah jadi
+let lastName = localStorage.getItem('so_lastname') || '';
+
+// Counter "Sesi" di-reset per HARI (otomatis nol pas ganti tanggal,
+// tapi tetap keinget walau app ditutup-buka di hari yang sama).
+function todayStr(){ const d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); }
+(function initCount(){
+  if(localStorage.getItem('so_count_date')===todayStr()){
+    count = parseInt(localStorage.getItem('so_count')||'0',10) || 0;
+  } else {
+    localStorage.setItem('so_count_date', todayStr());
+    localStorage.setItem('so_count','0');
+    count = 0;
+  }
+  countEl.textContent = count;
+})();
+
+if(DEMO){
+  limitEl.textContent = '/'+DAILY_LIMIT;
+  demoNote.textContent = '🔒 Versi demo: batas '+DAILY_LIMIT+' foto/hari. Versi penuh (APK) tanpa batas.';
+}
+
+/* ---------- camera ---------- */
+async function startCam(){
+  $('#startErr').textContent='';
+  // Penyebab #1 kamera ga muncul: halaman dibuka dari file:// atau http biasa.
+  // Chrome cuma kasih akses kamera di "secure context" (https / localhost).
+  if(!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    $('#startErr').innerHTML =
+      '⚠️ Kamera diblokir browser.<br><br>'+
+      'Halaman ini dibuka dari <b>file:// atau http biasa</b>, dan Chrome cuma '+
+      'ngasih akses kamera lewat <b>https</b> atau <b>localhost</b>.<br><br>'+
+      'Solusi: pakai versi <b>APK</b>, atau buka lewat localhost. '+
+      'Cek file CARA-PAKAI.';
+    $('#start').style.display='flex';
+    return;
+  }
+  try{
+    if(stream) stream.getTracks().forEach(t=>t.stop());
+    stream = await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode:{ideal:facing}, width:{ideal:2560}, height:{ideal:1440} },
+      audio:false
+    });
+    video.srcObject = stream;
+    track = stream.getVideoTracks()[0];
+    $('#start').style.display='none';
+    checkTorch();
+  }catch(e){
+    $('#startErr').textContent='Kamera ga bisa dibuka: '+e.message+
+      '. Pastikan izin kamera diizinkan.';
+    $('#start').style.display='flex';
+  }
+}
+
+function checkTorch(){
+  const caps = track && track.getCapabilities ? track.getCapabilities() : {};
+  $('#torchBtn').style.display = (caps && caps.torch) ? 'flex' : 'none';
+}
+
+$('#flipBtn').onclick = ()=>{ facing = facing==='environment'?'user':'environment'; torchOn=false; $('#torchBtn').classList.remove('on'); startCam(); };
+$('#torchBtn').onclick = async ()=>{
+  if(!track) return;
+  torchOn=!torchOn;
+  try{ await track.applyConstraints({advanced:[{torch:torchOn}]});
+       $('#torchBtn').classList.toggle('on',torchOn);
+  }catch(e){ showToast('Senter ga didukung HP ini'); torchOn=false; }
+};
+
+/* ---------- capture ---------- */
+$('#shutter').onclick = ()=>{
+  if(!stream) return;
+  if(DEMO && count >= DAILY_LIMIT){
+    showToast('🔒 Demo: batas '+DAILY_LIMIT+' foto/hari tercapai. Reset besok.');
+    return;
+  }
+  const w=video.videoWidth, h=video.videoHeight;
+  if(!w){ showToast('Kamera belum siap'); return; }
+  shot.width=w; shot.height=h;
+  shot.getContext('2d').drawImage(video,0,0,w,h);
+  flash.classList.remove('fire'); void flash.offsetWidth; flash.classList.add('fire');
+  // Buka sheet + focus SEKARANG (masih dalam gesture tap) -> keyboard HP naik sendiri.
+  blobReady=false;                 // foto saat ini belum jadi
+  openSheet();
+  // Proses gambar async di belakang; preview menyusul.
+  shot.toBlob(b=>{
+    if(lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
+    lastBlob=b; lastBlobUrl=URL.createObjectURL(b);
+    preview.style.backgroundImage=`url(${lastBlobUrl})`;
+    blobReady=true;                // siap disimpan
+  },'image/jpeg',0.92);
+};
+
+/* ---------- name sheet ---------- */
+function suggestName(){
+  // kalau nama terakhir ada angka di belakang -> naikin otomatis (001 -> 002)
+  let base = lastName;
+  if(base){
+    const m = base.match(/^(.*?)(\d+)(\D*)$/);
+    if(m){ const n=(parseInt(m[2])+1).toString().padStart(m[2].length,'0'); base=m[1]+n+m[3]; }
+  } else {
+    base = '';
+  }
+  return base;
+}
+function buildChips(){
+  const row=$('#suggestRow'); row.innerHTML='';
+  const now=new Date();
+  const stamp = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+  const chips=[];
+  chips.push(stamp);
+  chips.push('Gudang-');
+  chips.push('Kondisi-Baik');
+  chips.forEach(c=>{
+    const b=document.createElement('button'); b.className='chip'; b.textContent='+ '+c;
+    b.onclick=()=>{ nameInput.value=(nameInput.value+ (nameInput.value?'-':'') + c).replace(/--+/g,'-');
+      nameInput.focus(); };
+    row.appendChild(b);
+  });
+}
+function openSheet(){
+  sheet.classList.add('open');
+  nameInput.value = suggestName();
+  buildChips();
+  // Focus SINKRON dalam gesture tap shutter -> keyboard mobile muncul otomatis.
+  nameInput.focus(); nameInput.select();
+}
+function closeSheet(){ sheet.classList.remove('open'); }
+
+$('#retakeBtn').onclick = closeSheet;
+
+$('#saveBtn').onclick = ()=>{
+  let name = nameInput.value.trim()
+    .replace(/[\\/:*?"<>|]+/g,'-')   // buang karakter ilegal
+    .replace(/\s+/g,'-')             // spasi -> strip
+    .replace(/^-+|-+$/g,'')          // rapikan strip di ujung
+    .slice(0,120);                   // batasi panjang (limit nama file Android ~255 byte)
+  if(!name){ nameInput.focus(); showToast('Isi nama dulu'); return; }
+  // anti race: jangan simpan kalau blob foto saat ini belum jadi (hindari file kosong/salah)
+  if(!blobReady || !lastBlobUrl){ showToast('Foto lagi diproses, sebentar…'); return; }
+  // anti-duplikat O(1): mulai dari hitungan terakhir, Set tetap menjamin benar-benar unik
+  let key=name.toLowerCase(), finalName=name, dup=false;
+  if(usedNames.has(key)){
+    let n=(dupCount.get(key)||1)+1; finalName=name+'-'+n;
+    while(usedNames.has(finalName.toLowerCase())){ n++; finalName=name+'-'+n; }
+    dupCount.set(key,n); dup=true;
+  }
+  usedNames.add(finalName.toLowerCase());
+  lastName=finalName; localStorage.setItem('so_lastname',finalName);
+  // Di dalam APK (WebView) blob download ga jalan -> lewat jembatan native ke Pictures/SnapName.
+  // Di browser biasa -> tetap pakai <a download> ke folder Download.
+  if(window.AndroidSaver && window.AndroidSaver.savePhoto){
+    try{ window.AndroidSaver.savePhoto(shot.toDataURL('image/jpeg',0.92), finalName+'.jpg'); }
+    catch(e){ showToast('Gagal simpan: '+e.message); return; }
+  } else {
+    const a=document.createElement('a');
+    a.href=lastBlobUrl; a.download=finalName+'.jpg';
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+  count++; countEl.textContent=count;
+  localStorage.setItem('so_count', count); localStorage.setItem('so_count_date', todayStr());
+  closeSheet();
+  showToast((dup?'⚠ nama dobel → ':'✓ ')+finalName+'.jpg');
+};
+
+// Enter di keyboard = simpan
+nameInput.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); $('#saveBtn').click(); }});
+
+/* ---------- toast ---------- */
+let toastT;
+function showToast(msg){
+  toast.textContent=msg; toast.classList.add('show');
+  clearTimeout(toastT); toastT=setTimeout(()=>toast.classList.remove('show'),1400);
+}
+
+$('#startBtn').onclick = startCam;
+
+/* service worker for offline / installable */
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('sw.js').catch(()=>{});
+}
+</script>
+</body>
+</html>

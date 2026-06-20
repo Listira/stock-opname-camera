@@ -1,0 +1,129 @@
+package com.stockopname.snapname;
+
+import android.Manifest;
+import android.app.Activity;
+import android.content.pm.PackageManager;
+import android.os.Build;
+import android.os.Bundle;
+import android.view.View;
+import android.webkit.PermissionRequest;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+
+import androidx.webkit.WebViewAssetLoader;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class MainActivity extends Activity {
+
+    private WebView web;
+    private PermissionRequest pendingReq;
+    private static final int REQ_PERMS = 1001;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        web = new WebView(this);
+        setContentView(web);
+
+        // Serve bundled assets over a SECURE https origin so getUserMedia (camera) works offline.
+        final WebViewAssetLoader loader = new WebViewAssetLoader.Builder()
+                .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
+                .build();
+
+        WebSettings ws = web.getSettings();
+        ws.setJavaScriptEnabled(true);
+        ws.setDomStorageEnabled(true);
+        ws.setMediaPlaybackRequiresUserGesture(false);
+        ws.setAllowFileAccess(false);
+        ws.setAllowContentAccess(false);
+
+        // Native bridge for saving photos (WebView can't download blob: URLs).
+        web.addJavascriptInterface(new SaverBridge(this), "AndroidSaver");
+
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                return loader.shouldInterceptRequest(request.getUrl());
+            }
+        });
+
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onPermissionRequest(final PermissionRequest request) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        for (String r : request.getResources()) {
+                            if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(r)) {
+                                if (hasCamera()) {
+                                    request.grant(new String[]{PermissionRequest.RESOURCE_VIDEO_CAPTURE});
+                                } else {
+                                    pendingReq = request;
+                                    requestNeededPermissions();
+                                }
+                                return;
+                            }
+                        }
+                        request.deny();
+                    }
+                });
+            }
+        });
+
+        // Ask for camera (+ storage on old Android) up front so the prompt is familiar.
+        if (!hasCamera()) {
+            requestNeededPermissions();
+        }
+
+        web.loadUrl("https://appassets.androidplatform.net/assets/index.html");
+    }
+
+    private boolean hasCamera() {
+        return checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void requestNeededPermissions() {
+        List<String> perms = new ArrayList<>();
+        perms.add(Manifest.permission.CAMERA);
+        if (Build.VERSION.SDK_INT < 29) {
+            perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        }
+        requestPermissions(perms.toArray(new String[0]), REQ_PERMS);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_PERMS && pendingReq != null) {
+            boolean granted = false;
+            for (int i = 0; i < permissions.length; i++) {
+                if (Manifest.permission.CAMERA.equals(permissions[i])
+                        && grantResults[i] == PackageManager.PERMISSION_GRANTED) {
+                    granted = true;
+                }
+            }
+            if (granted) {
+                pendingReq.grant(new String[]{PermissionRequest.RESOURCE_VIDEO_CAPTURE});
+            } else {
+                pendingReq.deny();
+            }
+            pendingReq = null;
+        }
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (web != null && web.canGoBack()) {
+            web.goBack();
+        } else {
+            super.onBackPressed();
+        }
+    }
+}

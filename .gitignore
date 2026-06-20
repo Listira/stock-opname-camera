@@ -1,0 +1,14 @@
+# Android build outputs / machine-specific
+android/**/build/
+android/**/.gradle/
+android/local.properties
+android/**/*.iml
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+Thumbs.db
+.DS_Store
