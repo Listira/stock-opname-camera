@@ -193,7 +193,10 @@ with sync_playwright() as p:
         time.sleep(0.05)
     check("geolocation fix received (works offline)", gp)
     check("gps stamp enabled", page.evaluate("gpsOn")==True)
+    check("EXIF coords default ON", page.evaluate("exifOn")==True)
     page.click("#shutter"); page.wait_for_selector("#sheet.open", timeout=3000)
+    check("Maps link shown on geotagged photo", "show" in (page.get_attribute("#mapsLink","class") or ""))
+    check("shotPos captured at shutter", page.evaluate("!!shotPos"))
     page.fill("#nameInput","GPS-TEST")
     with page.expect_download(timeout=4000) as gdl:
         page.click("#saveBtn")

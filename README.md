@@ -63,6 +63,10 @@ present it runs as the full offline app; on `*.github.io` it runs as a capped de
 - 🗂️ **Auto folder per day** (v2.2) — photos land in `Pictures/SnapName/YYYY-MM-DD/`
 - 📋 **CSV photo log** (v2.2) — every shot is logged (filename, time, lat/long, address) and
   exportable to a CSV for audit/rekap
+- 🗺️ **EXIF geotagging + tap-to-Maps** (v2.3) — GPS coordinates are written into each photo's
+  EXIF (toggleable) so the file opens to a map in Google Photos/gallery; the in-app preview
+  has a "Lihat di Maps" link that fires a native `geo:` intent. Coordinates are captured at
+  shutter time and persist with the photo
 - 🔦 Torch toggle (when supported), front/back camera flip
 - 🧼 Filename sanitisation (illegal characters, length cap for Android filesystems)
 - 📴 Works in airplane mode; installable to the home screen as a PWA

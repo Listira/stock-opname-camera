@@ -88,6 +88,9 @@
     color:var(--txt);font-size:18px;padding:14px 14px;outline:none}
   #nameInput:focus{border-color:var(--accent)}
   .ext{display:flex;align-items:center;color:var(--muted);font-size:15px;padding:0 4px}
+  #mapsLink{display:none;margin-top:10px;color:#5aa9ff;font-size:14px;font-weight:600;
+    text-decoration:none;align-items:center;gap:6px}
+  #mapsLink.show{display:inline-flex}
   #suggestRow{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
   .chip{background:#0e1320;border:1px solid var(--line);color:var(--txt);font-size:13px;
     padding:8px 12px;border-radius:999px}
@@ -166,6 +169,7 @@
                autocomplete="off" autocapitalize="off" spellcheck="false">
         <span class="ext">.jpg</span>
       </div>
+      <a id="mapsLink">📍 Lihat lokasi di Google Maps</a>
       <div id="suggestRow"></div>
       <div class="btnrow">
         <button class="btn retake" id="retakeBtn">↩ Ulang</button>
@@ -181,7 +185,9 @@
 
       <div class="setHead">📍 Stempel Lokasi</div>
       <label class="wmRow"><input type="checkbox" id="gpsOnCb"> Stempel lokasi GPS + tanggal/jam di foto</label>
-      <div class="setNote">Koordinat &amp; waktu jalan offline. Alamat &amp; peta cuma muncul kalau ada sinyal.</div>
+      <label class="wmRow"><input type="checkbox" id="exifOnCb"> Tanam koordinat ke file (EXIF) — bisa dibuka di Maps lewat Galeri</label>
+      <div class="setNote">Koordinat &amp; waktu jalan offline. Alamat &amp; peta cuma muncul kalau ada sinyal.
+        EXIF = lokasi nempel di file foto (hati-hati kalau share foto mentah ke luar).</div>
 
       <hr class="setDiv">
       <div class="setHead">🏷️ Watermark Logo</div>
@@ -284,7 +290,7 @@ async function startCam(){
     $('#start').style.display='none';
     checkTorch();
     initCamControls();
-    if(gpsOn) startGeo();
+    if(gpsOn || exifOn) startGeo();
   }catch(e){
     $('#startErr').textContent='Kamera ga bisa dibuka: '+e.message+
       '. Pastikan izin kamera diizinkan.';
@@ -456,13 +462,15 @@ $('#wmDel').onclick   = ()=>{ wmImg=null; localStorage.removeItem('so_logo');
 loadWmFromStore();
 
 /* ---------- GPS + date/time stamp (v2.2) ---------- */
-const gpsBtn=$('#gpsBtn'), gpsOnCb=$('#gpsOnCb');
+const gpsBtn=$('#gpsBtn'), gpsOnCb=$('#gpsOnCb'), exifOnCb=$('#exifOnCb'), mapsLink=$('#mapsLink');
 let gpsOn = localStorage.getItem('so_gps_on')==='1';
-let lastPos=null, lastAddr='', geoWatch=null, lastGeoKey='';
+let exifOn = localStorage.getItem('so_exif_on')!=='0';   // default ON
+let lastPos=null, lastAddr='', geoWatch=null, lastGeoKey='', shotPos=null;
 
 function reflectGps(){
   gpsBtn.classList.toggle('on', gpsOn);
   gpsOnCb.checked = gpsOn;
+  exifOnCb.checked = exifOn;
 }
 function setGps(on){
   gpsOn=on; localStorage.setItem('so_gps_on', on?'1':'0'); reflectGps();
@@ -470,7 +478,19 @@ function setGps(on){
 }
 gpsBtn.onclick = ()=>setGps(!gpsOn);
 gpsOnCb.addEventListener('change', ()=>setGps(gpsOnCb.checked));
+exifOnCb.addEventListener('change', ()=>{
+  exifOn=exifOnCb.checked; localStorage.setItem('so_exif_on', exifOn?'1':'0');
+  if(exifOn) startGeo();
+  showToast('Koordinat ke file (EXIF): '+(exifOn?'ON':'OFF'));
+});
 reflectGps();
+
+// buka lokasi di Maps (native intent kalau di APK, else tab baru)
+function openMapsAt(lat, lon){
+  if(window.AndroidSaver && window.AndroidSaver.openMaps){ window.AndroidSaver.openMaps(String(lat), String(lon)); }
+  else window.open('https://www.google.com/maps?q='+lat+','+lon, '_blank');
+}
+mapsLink.onclick = (e)=>{ e.preventDefault(); if(shotPos) openMapsAt(shotPos.coords.latitude, shotPos.coords.longitude); };
 
 function startGeo(){
   if(geoWatch!=null || !navigator.geolocation) return;
@@ -601,6 +621,7 @@ $('#shutter').onclick = ()=>{
   }
   const w=video.videoWidth, h=video.videoHeight;
   if(!w){ showToast('Kamera belum siap'); return; }
+  shotPos = lastPos;   // kunci titik GPS saat jepret (buat stempel/EXIF/Maps)
   shot.width=w; shot.height=h;
   const ctx=shot.getContext('2d');
   if(zoomMode==='digital' && curZoom>1){
@@ -656,6 +677,8 @@ function openSheet(){
   sheet.classList.add('open');
   nameInput.value = suggestName();
   buildChips();
+  // tampilkan tombol Maps kalau foto ini punya titik GPS
+  mapsLink.classList.toggle('show', !!shotPos);
   // Focus SINKRON dalam gesture tap shutter -> keyboard mobile muncul otomatis.
   nameInput.focus(); nameInput.select();
 }
@@ -684,7 +707,9 @@ $('#saveBtn').onclick = ()=>{
   // Di dalam APK (WebView) blob download ga jalan -> lewat jembatan native ke Pictures/SnapName.
   // Di browser biasa -> tetap pakai <a download> ke folder Download.
   if(window.AndroidSaver && window.AndroidSaver.savePhoto){
-    try{ window.AndroidSaver.savePhoto(shot.toDataURL('image/jpeg',0.92), finalName+'.jpg'); }
+    const la = (exifOn && shotPos) ? String(shotPos.coords.latitude)  : '';
+    const lo = (exifOn && shotPos) ? String(shotPos.coords.longitude) : '';
+    try{ window.AndroidSaver.savePhoto(shot.toDataURL('image/jpeg',0.92), finalName+'.jpg', la, lo); }
     catch(e){ showToast('Gagal simpan: '+e.message); return; }
   } else {
     const a=document.createElement('a');
