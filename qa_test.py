@@ -49,6 +49,14 @@ with sync_playwright() as p:
     check("camera started (videoWidth>0)", ok, f"videoWidth={vw}")
     check("start overlay hidden after start", not page.is_visible("#start"))
 
+    print("\n=== V2: TAP-TO-FOCUS + ZOOM (graceful on fake cam) ===")
+    page.mouse.click(206, 430)  # tap middle of live preview -> focus ring
+    time.sleep(0.15)
+    check("tap shows focus ring", "show" in (page.get_attribute("#focusRing","class") or ""))
+    # pinch/zoom path must not throw even when device has no zoom capability
+    zerr = page.evaluate("(function(){ try{ setZoom(2.0); return 'ok'; }catch(e){ return e.message; } })()")
+    check("zoom call safe when unsupported", zerr=="ok", zerr)
+
     print("\n=== SHUTTER #1 -> NAME SHEET ===")
     shoot(page)
     check("name sheet opened", "open" in page.get_attribute("#sheet","class"))

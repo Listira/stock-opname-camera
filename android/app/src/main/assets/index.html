@@ -19,7 +19,7 @@
   #app{position:fixed;inset:0;display:flex;flex-direction:column}
 
   /* ---- Camera stage ---- */
-  #stage{position:relative;flex:1;background:#000;overflow:hidden}
+  #stage{position:relative;flex:1;background:#000;overflow:hidden;touch-action:none}
   #video,#shot{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
   #shot{display:none}
 
@@ -27,7 +27,8 @@
   #topbar{position:absolute;top:0;left:0;right:0;z-index:5;display:flex;
     justify-content:space-between;align-items:center;padding:14px 16px;
     padding-top:max(14px,env(safe-area-inset-top));
-    background:linear-gradient(#000a,transparent)}
+    background:linear-gradient(#000a,transparent);pointer-events:none}
+  #topbar button{pointer-events:auto}
   .pill{background:#0009;backdrop-filter:blur(6px);border:1px solid #ffffff22;
     border-radius:999px;padding:7px 13px;font-size:13px;font-weight:600;display:flex;
     align-items:center;gap:7px}
@@ -41,7 +42,8 @@
   #shutterRow{position:absolute;bottom:0;left:0;right:0;z-index:5;display:flex;
     align-items:center;justify-content:space-around;
     padding:0 24px 26px;padding-bottom:max(26px,env(safe-area-inset-bottom));
-    background:linear-gradient(transparent,#000c)}
+    background:linear-gradient(transparent,#000c);pointer-events:none}
+  #shutterRow button{pointer-events:auto}
   #shutter{width:78px;height:78px;border-radius:50%;background:#fff;border:5px solid #ffffff55;
     box-shadow:0 0 0 3px #000}
   #shutter:active{transform:scale(.9)}
@@ -51,6 +53,19 @@
   #flash{position:absolute;inset:0;background:#fff;opacity:0;z-index:8;pointer-events:none}
   #flash.fire{animation:fl .22s ease-out}
   @keyframes fl{0%{opacity:.85}100%{opacity:0}}
+
+  /* Tap-to-focus ring */
+  #focusRing{position:absolute;width:78px;height:78px;margin:-39px 0 0 -39px;z-index:6;
+    border:2px solid #fff;border-radius:50%;box-shadow:0 0 0 1px #0007;opacity:0;
+    pointer-events:none}
+  #focusRing.show{animation:fr .65s ease-out}
+  @keyframes fr{0%{opacity:0;transform:scale(1.6)}25%{opacity:1}60%{opacity:1;transform:scale(1)}100%{opacity:0}}
+
+  /* Zoom indicator */
+  #zoomInd{position:absolute;top:74px;left:50%;transform:translateX(-50%);z-index:6;
+    background:#000a;border:1px solid #ffffff22;border-radius:999px;padding:5px 12px;
+    font-size:13px;font-weight:700;color:#fff;opacity:0;pointer-events:none;transition:.15s}
+  #zoomInd.show{opacity:1}
 
   /* Toast */
   #toast{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) scale(.8);
@@ -99,6 +114,8 @@
   <div id="stage">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="shot" hidden></canvas>
+    <div id="focusRing"></div>
+    <div id="zoomInd"></div>
     <div id="flash"></div>
     <div id="toast"></div>
 
@@ -139,7 +156,7 @@
   <div id="start">
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
-    <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.</p>
+    <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
     <button id="startBtn">Nyalakan Kamera</button>
     <div class="err" id="startErr"></div>
     <div id="demoNote" style="color:#f4c84a;font-size:13px;max-width:300px"></div>
@@ -215,6 +232,7 @@ async function startCam(){
     track = stream.getVideoTracks()[0];
     $('#start').style.display='none';
     checkTorch();
+    initCamControls();
   }catch(e){
     $('#startErr').textContent='Kamera ga bisa dibuka: '+e.message+
       '. Pastikan izin kamera diizinkan.';
@@ -226,6 +244,78 @@ function checkTorch(){
   const caps = track && track.getCapabilities ? track.getCapabilities() : {};
   $('#torchBtn').style.display = (caps && caps.torch) ? 'flex' : 'none';
 }
+
+/* ---------- zoom & tap-to-focus (v2.0) ---------- */
+const focusRing=$('#focusRing'), zoomInd=$('#zoomInd');
+let zoomCap=null, curZoom=1, supportsFocusPoint=false;
+
+function initCamControls(){
+  const caps = track && track.getCapabilities ? track.getCapabilities() : {};
+  zoomCap = (caps && caps.zoom && caps.zoom.max>caps.zoom.min) ? caps.zoom : null;  // {min,max,step}
+  curZoom = (track.getSettings && track.getSettings().zoom) || (zoomCap ? zoomCap.min : 1);
+  supportsFocusPoint = !!(caps && (caps.focusMode || ('pointsOfInterest' in caps)));
+}
+
+let zoomIndT;
+function showZoom(){
+  zoomInd.textContent = curZoom.toFixed(1)+'x';
+  zoomInd.classList.add('show');
+  clearTimeout(zoomIndT); zoomIndT=setTimeout(()=>zoomInd.classList.remove('show'),900);
+}
+async function setZoom(z){
+  if(!zoomCap) return;
+  z = Math.min(zoomCap.max, Math.max(zoomCap.min, z));
+  if(Math.abs(z-curZoom)<1e-3) return;
+  curZoom = z;
+  try{ await track.applyConstraints({advanced:[{zoom:z}]}); showZoom(); }catch(e){}
+}
+
+async function focusAt(clientX, clientY){
+  const r = video.getBoundingClientRect();
+  // ring di titik tap (visual feedback selalu muncul)
+  focusRing.style.left = (clientX - r.left) + 'px';
+  focusRing.style.top  = (clientY - r.top) + 'px';
+  focusRing.classList.remove('show'); void focusRing.offsetWidth; focusRing.classList.add('show');
+  // coba fokus beneran kalau HP dukung (titik 0..1 + single-shot)
+  if(!track || !track.applyConstraints) return;
+  const x = Math.min(1, Math.max(0, (clientX - r.left)/r.width));
+  const y = Math.min(1, Math.max(0, (clientY - r.top)/r.height));
+  const tries = [
+    {advanced:[{focusMode:'single-shot', pointsOfInterest:[{x,y}]}]},
+    {advanced:[{pointsOfInterest:[{x,y}]}]},
+    {advanced:[{focusMode:'continuous'}]}
+  ];
+  for(const c of tries){ try{ await track.applyConstraints(c); break; }catch(e){} }
+}
+
+// Gesture di preview hidup: cubit (pinch) = zoom, satu tap = fokus.
+(function bindGestures(){
+  const pts = new Map();
+  let pinchStartDist=0, pinchStartZoom=1, pinching=false, tap=null;
+  const dist=()=>{ const a=[...pts.values()]; return Math.hypot(a[0].x-a[1].x, a[0].y-a[1].y); };
+  video.addEventListener('pointerdown', e=>{
+    pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pts.size===1){ tap={x:e.clientX,y:e.clientY,t:Date.now(),moved:false}; }
+    else if(pts.size===2){ pinching=true; tap=null; pinchStartDist=dist()||1; pinchStartZoom=curZoom; }
+  });
+  video.addEventListener('pointermove', e=>{
+    if(!pts.has(e.pointerId)) return;
+    const p=pts.get(e.pointerId);
+    if(tap && pts.size===1 && Math.hypot(e.clientX-tap.x, e.clientY-tap.y)>12) tap.moved=true;
+    p.x=e.clientX; p.y=e.clientY;
+    if(pinching && pts.size===2 && zoomCap){ setZoom(pinchStartZoom * (dist()/pinchStartDist)); }
+  });
+  function up(e){
+    pts.delete(e.pointerId);
+    if(pts.size<2) pinching=false;
+    if(pts.size===0){
+      if(tap && !tap.moved && (Date.now()-tap.t)<500) focusAt(tap.x, tap.y);
+      tap=null;
+    }
+  }
+  video.addEventListener('pointerup', up);
+  video.addEventListener('pointercancel', e=>{ pts.delete(e.pointerId); if(pts.size<2) pinching=false; tap=null; });
+})();
 
 $('#flipBtn').onclick = ()=>{ facing = facing==='environment'?'user':'environment'; torchOn=false; $('#torchBtn').classList.remove('on'); startCam(); };
 $('#torchBtn').onclick = async ()=>{

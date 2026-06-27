@@ -50,6 +50,9 @@ present it runs as the full offline app; on `*.github.io` it runs as a capped de
 - 🛡️ **Anti-duplicate guard** — repeated names auto-suffix `-2`, `-3` (O(1) via a counter map
   + a `Set` for correctness), so files never silently overwrite
 - 🧮 Daily session counter that resets at midnight (persisted in `localStorage`)
+- 🔍 **Pinch-to-zoom & tap-to-focus** (v2.0) — driven by native `MediaStreamTrack`
+  capability constraints (`zoom`, `pointsOfInterest`, `focusMode`) with graceful fallback
+  on devices that don't expose them
 - 🔦 Torch toggle (when supported), front/back camera flip
 - 🧼 Filename sanitisation (illegal characters, length cap for Android filesystems)
 - 📴 Works in airplane mode; installable to the home screen as a PWA
