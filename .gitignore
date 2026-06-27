@@ -5,6 +5,11 @@ android/local.properties
 android/**/*.iml
 .idea/
 
+# Signing secrets — NEVER commit these
+*.jks
+*.keystore
+keystore.properties
+
 # Python
 __pycache__/
 *.pyc

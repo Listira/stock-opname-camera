@@ -53,9 +53,12 @@ with sync_playwright() as p:
     page.mouse.click(206, 430)  # tap middle of live preview -> focus ring
     time.sleep(0.15)
     check("tap shows focus ring", "show" in (page.get_attribute("#focusRing","class") or ""))
-    # pinch/zoom path must not throw even when device has no zoom capability
-    zerr = page.evaluate("(function(){ try{ setZoom(2.0); return 'ok'; }catch(e){ return e.message; } })()")
-    check("zoom call safe when unsupported", zerr=="ok", zerr)
+    # fake cam has no native zoom cap -> must fall back to DIGITAL zoom (CSS scale)
+    check("digital zoom mode on fake cam", page.evaluate("zoomMode")=="digital", page.evaluate("zoomMode"))
+    page.evaluate("setZoom(3)")
+    check("digital zoom applies CSS scale", "scale(3" in page.evaluate("document.querySelector('#video').style.transform"),
+          page.evaluate("document.querySelector('#video').style.transform"))
+    page.evaluate("setZoom(1)")
 
     print("\n=== SHUTTER #1 -> NAME SHEET ===")
     shoot(page)
@@ -156,6 +159,29 @@ with sync_playwright() as p:
     time.sleep(0.5)
     sw_ok = page.evaluate("navigator.serviceWorker && navigator.serviceWorker.controller!==undefined")
     check("service worker API available", sw_ok)
+
+    print("\n=== V2.1: WATERMARK LOGO ===")
+    import base64
+    png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+    logo_path = os.path.join(ROOT, "_qa_logo.png")
+    with open(logo_path, "wb") as fh: fh.write(png)
+    page.set_input_files("#wmFile", logo_path)
+    ok=False
+    for _ in range(40):
+        if page.evaluate("!!wmImg"): ok=True; break
+        time.sleep(0.05)
+    check("logo loaded into wmImg", ok)
+    check("watermark auto-enabled + stored",
+          page.evaluate("localStorage.getItem('so_wm_on')")=="1" and page.evaluate("!!localStorage.getItem('so_logo')"))
+    page.click("#shutter"); page.wait_for_selector("#sheet.open", timeout=3000)
+    page.fill("#nameInput","WM-TEST")
+    with page.expect_download(timeout=4000) as wdl:
+        page.click("#saveBtn")
+    check("capture+save works with watermark ON", wdl.value.suggested_filename=="WM-TEST.jpg", wdl.value.suggested_filename)
+    # turn watermark off again so it doesn't bleed into later assertions
+    page.evaluate("document.querySelector('#wmOn').checked=false; localStorage.setItem('so_wm_on','0')")
+    try: os.remove(logo_path)
+    except Exception: pass
 
     print("\n=== DEMO LIMIT (10/day, only on web demo) ===")
     dp = ctx.new_page()

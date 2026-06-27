@@ -2,6 +2,10 @@ plugins {
     id 'com.android.application'
 }
 
+def ksPropsFile = rootProject.file('app/keystore.properties')
+def ksProps = new Properties()
+if (ksPropsFile.exists()) { ksProps.load(new FileInputStream(ksPropsFile)) }
+
 android {
     namespace 'com.stockopname.snapname'
     compileSdk 34
@@ -10,13 +14,25 @@ android {
         applicationId 'com.stockopname.snapname'
         minSdk 24
         targetSdk 34
-        versionCode 2
-        versionName '2.0'
+        versionCode 3
+        versionName '2.1'
+    }
+
+    signingConfigs {
+        release {
+            if (ksPropsFile.exists()) {
+                storeFile file(ksProps['storeFile'])
+                storePassword ksProps['storePassword']
+                keyAlias ksProps['keyAlias']
+                keyPassword ksProps['keyPassword']
+            }
+        }
     }
 
     buildTypes {
         release {
             minifyEnabled false
+            if (ksPropsFile.exists()) { signingConfig signingConfigs.release }
         }
     }
 

@@ -107,6 +107,23 @@
     padding:16px 30px;border-radius:14px}
   .logo{font-size:46px}
   .err{color:var(--danger);font-size:13px;max-width:300px}
+
+  /* Watermark modal */
+  #wmModal{position:absolute;inset:0;z-index:25;display:none;align-items:center;justify-content:center;
+    background:#000b;backdrop-filter:blur(3px);padding:20px}
+  #wmModal.open{display:flex}
+  .wmCard{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:20px;
+    width:100%;max-width:340px}
+  .wmCard h3{margin:0 0 14px;font-size:18px}
+  #wmPreview{height:96px;border:1px dashed var(--line);border-radius:12px;margin-bottom:14px;
+    display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px;
+    background:repeating-conic-gradient(#1b2233 0% 25%,#141a26 0% 50%) 50%/18px 18px}
+  #wmPreview img{max-height:84px;max-width:90%}
+  .wmRow{display:flex;align-items:center;gap:10px;font-size:14px;color:var(--txt);margin:10px 0}
+  .wmRow input{width:18px;height:18px}
+  .wmBtns{display:flex;gap:10px;margin:14px 0}
+  .wmCard .btn{padding:13px;font-size:15px}
+  .btn.ghost{background:#2a3346}
 </style>
 </head>
 <body>
@@ -122,6 +139,7 @@
     <div id="topbar">
       <div class="pill">📸 Sesi: <b id="count">0</b><span id="limit"></span></div>
       <div style="display:flex;gap:10px">
+        <button class="iconbtn" id="wmBtn" title="Watermark logo">🏷️</button>
         <button class="iconbtn" id="torchBtn" title="Senter">🔦</button>
         <button class="iconbtn" id="flipBtn" title="Ganti kamera">🔄</button>
       </div>
@@ -149,6 +167,22 @@
         <button class="btn retake" id="retakeBtn">↩ Ulang</button>
         <button class="btn save" id="saveBtn">Simpan ✓</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Watermark modal -->
+  <div id="wmModal">
+    <div class="wmCard">
+      <h3>🏷️ Watermark Logo</h3>
+      <div id="wmPreview">Belum ada logo</div>
+      <label class="wmRow"><input type="checkbox" id="wmRemoveBg" checked> Hapus background otomatis</label>
+      <label class="wmRow"><input type="checkbox" id="wmOn"> Tampilkan di pojok kanan atas foto</label>
+      <input type="file" id="wmFile" accept="image/*" hidden>
+      <div class="wmBtns">
+        <button class="btn ghost" id="wmPick">Pilih Logo</button>
+        <button class="btn ghost" id="wmDel">Hapus</button>
+      </div>
+      <button class="btn save" id="wmClose">Selesai</button>
     </div>
   </div>
 
@@ -247,27 +281,39 @@ function checkTorch(){
 
 /* ---------- zoom & tap-to-focus (v2.0) ---------- */
 const focusRing=$('#focusRing'), zoomInd=$('#zoomInd');
-let zoomCap=null, curZoom=1, supportsFocusPoint=false;
+let zoomMode='digital', curZoom=1, minZoom=1, maxZoom=5, supportsFocusPoint=false;
 
 function initCamControls(){
   const caps = track && track.getCapabilities ? track.getCapabilities() : {};
-  zoomCap = (caps && caps.zoom && caps.zoom.max>caps.zoom.min) ? caps.zoom : null;  // {min,max,step}
-  curZoom = (track.getSettings && track.getSettings().zoom) || (zoomCap ? zoomCap.min : 1);
+  if(caps && caps.zoom && caps.zoom.max>caps.zoom.min){
+    // kamera dukung zoom native (optik/sensor)
+    zoomMode='native'; minZoom=caps.zoom.min; maxZoom=caps.zoom.max;
+    curZoom=(track.getSettings && track.getSettings().zoom) || minZoom;
+    video.style.transform='';
+  } else {
+    // fallback DIGITAL zoom (crop) -> jalan di SEMUA HP termasuk Redmi/MIUI
+    zoomMode='digital'; minZoom=1; maxZoom=5; curZoom=1;
+    video.style.transform='';
+  }
   supportsFocusPoint = !!(caps && (caps.focusMode || ('pointsOfInterest' in caps)));
 }
 
 let zoomIndT;
 function showZoom(){
-  zoomInd.textContent = curZoom.toFixed(1)+'x';
+  zoomInd.textContent = curZoom.toFixed(1)+'x'+(zoomMode==='digital'?' (digital)':'');
   zoomInd.classList.add('show');
   clearTimeout(zoomIndT); zoomIndT=setTimeout(()=>zoomInd.classList.remove('show'),900);
 }
 async function setZoom(z){
-  if(!zoomCap) return;
-  z = Math.min(zoomCap.max, Math.max(zoomCap.min, z));
+  z = Math.min(maxZoom, Math.max(minZoom, z));
   if(Math.abs(z-curZoom)<1e-3) return;
   curZoom = z;
-  try{ await track.applyConstraints({advanced:[{zoom:z}]}); showZoom(); }catch(e){}
+  if(zoomMode==='native'){
+    try{ await track.applyConstraints({advanced:[{zoom:z}]}); }catch(e){ /* sebagian HP nolak -> abaikan */ }
+  } else {
+    video.style.transform = 'scale('+z+')';   // digital zoom dari tengah
+  }
+  showZoom();
 }
 
 async function focusAt(clientX, clientY){
@@ -303,7 +349,7 @@ async function focusAt(clientX, clientY){
     const p=pts.get(e.pointerId);
     if(tap && pts.size===1 && Math.hypot(e.clientX-tap.x, e.clientY-tap.y)>12) tap.moved=true;
     p.x=e.clientX; p.y=e.clientY;
-    if(pinching && pts.size===2 && zoomCap){ setZoom(pinchStartZoom * (dist()/pinchStartDist)); }
+    if(pinching && pts.size===2){ setZoom(pinchStartZoom * (dist()/pinchStartDist)); }
   });
   function up(e){
     pts.delete(e.pointerId);
@@ -316,6 +362,80 @@ async function focusAt(clientX, clientY){
   video.addEventListener('pointerup', up);
   video.addEventListener('pointercancel', e=>{ pts.delete(e.pointerId); if(pts.size<2) pinching=false; tap=null; });
 })();
+
+/* ---------- watermark logo (v2.1) ---------- */
+const wmModal=$('#wmModal'), wmPreview=$('#wmPreview'), wmFile=$('#wmFile'),
+      wmOn=$('#wmOn'), wmRemoveBg=$('#wmRemoveBg');
+let wmImg=null;   // HTMLImageElement siap di-tempel ke foto
+
+// Proses logo: downscale (maks 512px) + opsi hapus background.
+// Hapus bg = jadiin transparan piksel yang warnanya mirip sudut gambar (logo di latar polos).
+function processLogo(img, removeBgFlag){
+  const maxDim=512;
+  let W=img.naturalWidth||img.width, H=img.naturalHeight||img.height;
+  const s=Math.min(1, maxDim/Math.max(W,H)); W=Math.max(1,Math.round(W*s)); H=Math.max(1,Math.round(H*s));
+  const c=document.createElement('canvas'); c.width=W; c.height=H;
+  const x=c.getContext('2d'); x.drawImage(img,0,0,W,H);
+  if(removeBgFlag){
+    let d; try{ d=x.getImageData(0,0,W,H); }catch(e){ return c.toDataURL('image/png'); }
+    const p=d.data, at=(px,py)=>((py*W+px)*4);
+    const cs=[[0,0],[W-1,0],[0,H-1],[W-1,H-1]];
+    let r=0,g=0,b=0; cs.forEach(([px,py])=>{const i=at(px,py);r+=p[i];g+=p[i+1];b+=p[i+2];}); r/=4;g/=4;b/=4;
+    for(let i=0;i<p.length;i+=4){
+      const dd=Math.sqrt((p[i]-r)**2+(p[i+1]-g)**2+(p[i+2]-b)**2);
+      if(dd<70) p[i+3]=0;   // mirip warna latar -> transparan
+    }
+    x.putImageData(d,0,0);
+  }
+  return c.toDataURL('image/png');
+}
+function renderWmPreview(){
+  if(wmImg){ wmPreview.innerHTML=''; const c=wmImg.cloneNode(); wmPreview.appendChild(c); }
+  else { wmPreview.textContent='Belum ada logo'; }
+}
+function loadWmFromStore(){
+  wmOn.checked = localStorage.getItem('so_wm_on')==='1';
+  const data=localStorage.getItem('so_logo');
+  if(data){ const im=new Image(); im.onload=()=>{ wmImg=im; renderWmPreview(); }; im.src=data; }
+  else renderWmPreview();
+}
+// dipanggil saat capture (function declaration -> ke-hoist, aman dipakai shutter)
+function drawWatermark(ctx, w, h){
+  if(!wmOn.checked || !wmImg || !(wmImg.width||wmImg.naturalWidth)) return;
+  const iw=wmImg.naturalWidth||wmImg.width, ih=wmImg.naturalHeight||wmImg.height;
+  const lw=Math.round(w*0.12), lh=Math.round(lw*ih/iw), m=Math.round(w*0.03);
+  ctx.drawImage(wmImg, w-lw-m, m, lw, lh);   // pojok kanan atas
+}
+
+wmFile.addEventListener('change', e=>{
+  const f=e.target.files && e.target.files[0]; if(!f) return;
+  const reader=new FileReader();
+  reader.onload=()=>{
+    const im=new Image();
+    im.onload=()=>{
+      const out=processLogo(im, wmRemoveBg.checked);
+      const fim=new Image();
+      fim.onload=()=>{
+        wmImg=fim;
+        try{ localStorage.setItem('so_logo', out); }catch(err){ showToast('Logo kegedean buat disimpan'); }
+        wmOn.checked=true; localStorage.setItem('so_wm_on','1');
+        renderWmPreview();
+        showToast('Logo disimpan'+(wmRemoveBg.checked?' (bg dihapus)':''));
+      };
+      fim.src=out;
+    };
+    im.src=reader.result;
+  };
+  reader.readAsDataURL(f);
+  e.target.value='';
+});
+wmOn.addEventListener('change', ()=>localStorage.setItem('so_wm_on', wmOn.checked?'1':'0'));
+$('#wmBtn').onclick   = ()=>wmModal.classList.add('open');
+$('#wmClose').onclick = ()=>wmModal.classList.remove('open');
+$('#wmPick').onclick  = ()=>wmFile.click();
+$('#wmDel').onclick   = ()=>{ wmImg=null; localStorage.removeItem('so_logo');
+  wmOn.checked=false; localStorage.setItem('so_wm_on','0'); renderWmPreview(); showToast('Logo dihapus'); };
+loadWmFromStore();
 
 $('#flipBtn').onclick = ()=>{ facing = facing==='environment'?'user':'environment'; torchOn=false; $('#torchBtn').classList.remove('on'); startCam(); };
 $('#torchBtn').onclick = async ()=>{
@@ -336,7 +456,15 @@ $('#shutter').onclick = ()=>{
   const w=video.videoWidth, h=video.videoHeight;
   if(!w){ showToast('Kamera belum siap'); return; }
   shot.width=w; shot.height=h;
-  shot.getContext('2d').drawImage(video,0,0,w,h);
+  const ctx=shot.getContext('2d');
+  if(zoomMode==='digital' && curZoom>1){
+    // ambil bagian tengah sesuai zoom, regangkan ke kanvas penuh
+    const sw=w/curZoom, sh=h/curZoom, sx=(w-sw)/2, sy=(h-sh)/2;
+    ctx.drawImage(video, sx,sy,sw,sh, 0,0,w,h);
+  } else {
+    ctx.drawImage(video,0,0,w,h);
+  }
+  drawWatermark(ctx, w, h);   // tempel logo di pojok kanan atas (kalau aktif)
   flash.classList.remove('fire'); void flash.offsetWidth; flash.classList.add('fire');
   // Buka sheet + focus SEKARANG (masih dalam gesture tap) -> keyboard HP naik sendiri.
   blobReady=false;                 // foto saat ini belum jadi

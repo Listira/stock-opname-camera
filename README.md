@@ -50,9 +50,12 @@ present it runs as the full offline app; on `*.github.io` it runs as a capped de
 - 🛡️ **Anti-duplicate guard** — repeated names auto-suffix `-2`, `-3` (O(1) via a counter map
   + a `Set` for correctness), so files never silently overwrite
 - 🧮 Daily session counter that resets at midnight (persisted in `localStorage`)
-- 🔍 **Pinch-to-zoom & tap-to-focus** (v2.0) — driven by native `MediaStreamTrack`
-  capability constraints (`zoom`, `pointsOfInterest`, `focusMode`) with graceful fallback
-  on devices that don't expose them
+- 🔍 **Pinch-to-zoom & tap-to-focus** (v2.0) — uses native `MediaStreamTrack` constraints
+  (`zoom`, `pointsOfInterest`, `focusMode`) and **falls back to digital (canvas-crop) zoom**
+  on devices that don't expose a zoom capability (e.g. MIUI/Redmi), so zoom works everywhere
+- 🏷️ **Logo watermark** (v2.1) — drop in a company logo placed top-right on every photo, with
+  a one-tap **automatic background removal** (corner-sampled chroma keying) for logos on
+  plain backgrounds
 - 🔦 Torch toggle (when supported), front/back camera flip
 - 🧼 Filename sanitisation (illegal characters, length cap for Android filesystems)
 - 📴 Works in airplane mode; installable to the home screen as a PWA
