@@ -29,7 +29,8 @@ with sync_playwright() as p:
         "--autoplay-policy=no-user-gesture-required",
     ])
     ctx = browser.new_context(accept_downloads=True, viewport={"width":412,"height":860},
-                              permissions=["camera"])
+                              permissions=["camera","geolocation"])
+    ctx.set_geolocation({"latitude":-6.264199,"longitude":106.866546,"accuracy":8})
     page = ctx.new_page()
     page.on("console", lambda m: console_errs.append(m.text) if m.type=="error" else None)
     page.on("pageerror", lambda e: page_errs.append(str(e)))
@@ -182,6 +183,28 @@ with sync_playwright() as p:
     page.evaluate("document.querySelector('#wmOn').checked=false; localStorage.setItem('so_wm_on','0')")
     try: os.remove(logo_path)
     except Exception: pass
+
+    print("\n=== V2.2: GPS STAMP + CSV LOG (offline = coords only) ===")
+    ctx.set_offline(True)   # simulasi kebun tanpa sinyal: GPS jalan, alamat/peta tidak
+    page.evaluate("setGps(true)")
+    gp=False
+    for _ in range(60):
+        if page.evaluate("!!lastPos"): gp=True; break
+        time.sleep(0.05)
+    check("geolocation fix received (works offline)", gp)
+    check("gps stamp enabled", page.evaluate("gpsOn")==True)
+    page.click("#shutter"); page.wait_for_selector("#sheet.open", timeout=3000)
+    page.fill("#nameInput","GPS-TEST")
+    with page.expect_download(timeout=4000) as gdl:
+        page.click("#saveBtn")
+    check("capture+save works with GPS stamp", gdl.value.suggested_filename=="GPS-TEST.jpg", gdl.value.suggested_filename)
+    last = page.evaluate("(JSON.parse(localStorage.getItem('so_log')||'[]')).slice(-1)[0]")
+    check("photo logged with latitude", bool(last) and abs(float(last.get('lat',0))-(-6.264199))<0.01, str(last)[:80])
+    with page.expect_download(timeout=4000) as cdl:
+        page.evaluate("exportCSV()")
+    check("CSV export downloads .csv", cdl.value.suggested_filename.endswith(".csv"), cdl.value.suggested_filename)
+    page.evaluate("setGps(false)")
+    ctx.set_offline(False)
 
     print("\n=== DEMO LIMIT (10/day, only on web demo) ===")
     dp = ctx.new_page()

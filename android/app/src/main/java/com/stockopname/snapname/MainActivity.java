@@ -55,6 +55,13 @@ public class MainActivity extends Activity {
         });
 
         web.setWebChromeClient(new WebChromeClient() {
+            // izinkan navigator.geolocation buat web app (izin OS sudah diminta terpisah)
+            @Override
+            public void onGeolocationPermissionsShowPrompt(String origin,
+                    android.webkit.GeolocationPermissions.Callback callback) {
+                callback.invoke(origin, true, false);
+            }
+
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
                 runOnUiThread(new Runnable() {
@@ -92,6 +99,7 @@ public class MainActivity extends Activity {
     private void requestNeededPermissions() {
         List<String> perms = new ArrayList<>();
         perms.add(Manifest.permission.CAMERA);
+        perms.add(Manifest.permission.ACCESS_FINE_LOCATION);  // buat stempel GPS
         if (Build.VERSION.SDK_INT < 29) {
             perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
         }

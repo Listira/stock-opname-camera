@@ -56,6 +56,13 @@ present it runs as the full offline app; on `*.github.io` it runs as a capped de
 - 🏷️ **Logo watermark** (v2.1) — drop in a company logo placed top-right on every photo, with
   a one-tap **automatic background removal** (corner-sampled chroma keying) for logos on
   plain backgrounds
+- 📍 **GPS + date/time stamp** (v2.2) — a GPS-Map-Camera-style banner burned into each photo.
+  **GPS coordinates and timestamp work fully offline** (satellite, no signal needed); the
+  street address is reverse-geocoded best-effort only when online. Native geolocation bridged
+  into the WebView
+- 🗂️ **Auto folder per day** (v2.2) — photos land in `Pictures/SnapName/YYYY-MM-DD/`
+- 📋 **CSV photo log** (v2.2) — every shot is logged (filename, time, lat/long, address) and
+  exportable to a CSV for audit/rekap
 - 🔦 Torch toggle (when supported), front/back camera flip
 - 🧼 Filename sanitisation (illegal characters, length cap for Android filesystems)
 - 📴 Works in airplane mode; installable to the home screen as a PWA
