@@ -130,6 +130,35 @@
   .wmBtns{display:flex;gap:10px;margin:14px 0}
   .wmCard .btn{padding:13px;font-size:15px}
   .btn.ghost{background:#2a3346}
+
+  /* Bottom-left last-photo thumbnail */
+  .thumbBtn{width:52px;height:52px;border-radius:12px;border:2px solid #fff;
+    background:#0009 center/cover no-repeat;box-shadow:0 0 0 2px #0006;overflow:hidden}
+  .thumbBtn.empty{border-style:dashed;border-color:#ffffff66}
+  .thumbBtn:active{transform:scale(.92)}
+  .thumbBtn .cnt{position:absolute;transform:translate(18px,-26px);background:var(--accent);
+    color:#fff;font-size:11px;font-weight:800;border-radius:999px;padding:1px 6px;border:1.5px solid #000}
+
+  /* Session gallery modal */
+  #galModal{position:absolute;inset:0;z-index:28;display:none;flex-direction:column;background:#0b0f17}
+  #galModal.open{display:flex}
+  .galBar{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;
+    padding-top:max(14px,env(safe-area-inset-top));border-bottom:1px solid var(--line)}
+  .galBar b{font-size:16px}
+  .galBar button{background:none;border:none;color:#fff;font-size:20px;width:40px;height:40px}
+  #galGrid{flex:1;overflow:auto;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:6px}
+  .galCell{position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;background:#1b2233}
+  .galCell img{width:100%;height:100%;object-fit:cover}
+  .galCell span{position:absolute;left:0;right:0;bottom:0;font-size:10px;color:#fff;
+    background:linear-gradient(transparent,#000c);padding:8px 5px 3px;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  #galEmpty{padding:40px 24px;text-align:center;color:var(--muted);font-size:14px;line-height:1.5}
+  /* lightbox */
+  #galView{position:absolute;inset:0;z-index:29;display:none;flex-direction:column;
+    align-items:center;justify-content:center;background:#000e;padding:16px}
+  #galView.open{display:flex}
+  #galImg{max-width:100%;max-height:80%;border-radius:10px}
+  #galName{color:#fff;margin-top:12px;font-weight:700;text-align:center;word-break:break-all}
 </style>
 </head>
 <body>
@@ -153,7 +182,7 @@
     </div>
 
     <div id="shutterRow">
-      <div class="side"></div>
+      <button id="galleryBtn" class="thumbBtn side empty" aria-label="Galeri sesi"></button>
       <button id="shutter" aria-label="Jepret"></button>
       <div class="side"></div>
     </div>
@@ -175,6 +204,20 @@
         <button class="btn retake" id="retakeBtn">↩ Ulang</button>
         <button class="btn save" id="saveBtn">Simpan ✓</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Session gallery -->
+  <div id="galModal">
+    <div class="galBar">
+      <button id="galClose">✕</button>
+      <b id="galTitle">Foto sesi ini</b>
+      <span style="width:40px"></span>
+    </div>
+    <div id="galGrid"></div>
+    <div id="galView">
+      <img id="galImg" alt="">
+      <div id="galName"></div>
     </div>
   </div>
 
@@ -427,7 +470,7 @@ function loadWmFromStore(){
 function drawWatermark(ctx, w, h){
   if(!wmOn.checked || !wmImg || !(wmImg.width||wmImg.naturalWidth)) return;
   const iw=wmImg.naturalWidth||wmImg.width, ih=wmImg.naturalHeight||wmImg.height;
-  const lw=Math.round(w*0.12), lh=Math.round(lw*ih/iw), m=Math.round(w*0.03);
+  const lw=Math.round(w*0.18), lh=Math.round(lw*ih/iw), m=Math.round(w*0.03);
   ctx.drawImage(wmImg, w-lw-m, m, lw, lh);   // pojok kanan atas
 }
 
@@ -603,6 +646,58 @@ function exportCSV(){
 }
 $('#csvBtn').onclick = exportCSV;
 
+/* ---------- session gallery (v2.5) ---------- */
+const galleryBtn=$('#galleryBtn'), galModal=$('#galModal'), galGrid=$('#galGrid'),
+      galView=$('#galView'), galImg=$('#galImg'), galName=$('#galName'), galTitle=$('#galTitle');
+const GAL_MAX=30;
+let gallery=[];
+try{ gallery=JSON.parse(localStorage.getItem('so_gallery')||'[]'); }catch(e){ gallery=[]; }
+
+function makeThumb(canvas, maxW){
+  const r=maxW/canvas.width, w=Math.min(maxW,canvas.width), h=Math.round(canvas.height*(w/canvas.width));
+  const c=document.createElement('canvas'); c.width=w; c.height=h;
+  c.getContext('2d').drawImage(canvas,0,0,w,h);
+  return c.toDataURL('image/jpeg',0.55);
+}
+function pushGallery(name){
+  try{
+    gallery.push({thumb:makeThumb(shot,420), name, time:Date.now()});
+    if(gallery.length>GAL_MAX) gallery=gallery.slice(-GAL_MAX);
+    try{ localStorage.setItem('so_gallery', JSON.stringify(gallery)); }
+    catch(e){ gallery=gallery.slice(-Math.floor(GAL_MAX/2));
+      try{ localStorage.setItem('so_gallery', JSON.stringify(gallery)); }catch(_){} }
+    updateThumbBtn();
+  }catch(e){}
+}
+function updateThumbBtn(){
+  if(gallery.length){
+    galleryBtn.style.backgroundImage='url('+gallery[gallery.length-1].thumb+')';
+    galleryBtn.classList.remove('empty');
+    galleryBtn.innerHTML='<span class="cnt">'+gallery.length+'</span>';
+  } else { galleryBtn.style.backgroundImage=''; galleryBtn.classList.add('empty'); galleryBtn.innerHTML=''; }
+}
+function openGallery(){
+  galTitle.textContent='Foto sesi ini ('+gallery.length+')';
+  galGrid.innerHTML='';
+  if(!gallery.length){
+    galGrid.innerHTML='<div id="galEmpty">Belum ada foto di sesi ini.<br>Semua foto tetap aman di Galeri HP (Pictures/SnapName).</div>';
+  } else {
+    for(let i=gallery.length-1;i>=0;i--){
+      const g=gallery[i], cell=document.createElement('div'); cell.className='galCell';
+      const im=document.createElement('img'); im.src=g.thumb;
+      const sp=document.createElement('span'); sp.textContent=g.name;
+      cell.appendChild(im); cell.appendChild(sp);
+      cell.onclick=()=>{ galImg.src=g.thumb; galName.textContent=g.name; galView.classList.add('open'); };
+      galGrid.appendChild(cell);
+    }
+  }
+  galModal.classList.add('open');
+}
+galleryBtn.onclick=openGallery;
+$('#galClose').onclick=()=>galModal.classList.remove('open');
+galView.onclick=()=>galView.classList.remove('open');
+updateThumbBtn();
+
 $('#flipBtn').onclick = ()=>{ facing = facing==='environment'?'user':'environment'; torchOn=false; $('#torchBtn').classList.remove('on'); startCam(); };
 $('#torchBtn').onclick = async ()=>{
   if(!track) return;
@@ -719,6 +814,7 @@ $('#saveBtn').onclick = ()=>{
   count++; countEl.textContent=count;
   localStorage.setItem('so_count', count); localStorage.setItem('so_count_date', todayStr());
   logPhoto(finalName+'.jpg');
+  pushGallery(finalName+'.jpg');
   closeSheet();
   showToast((dup?'⚠ nama dobel → ':'✓ ')+finalName+'.jpg');
 };

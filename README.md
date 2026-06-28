@@ -67,6 +67,9 @@ present it runs as the full offline app; on `*.github.io` it runs as a capped de
   EXIF (toggleable) so the file opens to a map in Google Photos/gallery; the in-app preview
   has a "Lihat di Maps" link that fires a native `geo:` intent. Coordinates are captured at
   shutter time and persist with the photo
+- 🖼️ **In-app session gallery** (v2.5) — a last-photo thumbnail (with a count badge) sits
+  bottom-left like a real camera app; tap it to review this session's shots in a grid +
+  lightbox without leaving for the system gallery (thumbnails cached in `localStorage`)
 - 🔦 Torch toggle (when supported), front/back camera flip
 - 🧼 Filename sanitisation (illegal characters, length cap for Android filesystems)
 - 📴 Works in airplane mode; installable to the home screen as a PWA
