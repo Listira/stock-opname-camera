@@ -2,11 +2,14 @@ package com.stockopname.snapname;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
 import android.webkit.PermissionRequest;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -23,7 +26,9 @@ public class MainActivity extends Activity {
 
     private WebView web;
     private PermissionRequest pendingReq;
+    private ValueCallback<Uri[]> filePathCallback;   // buat <input type=file> (pilih logo)
     private static final int REQ_PERMS = 1001;
+    private static final int REQ_FILE = 1002;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -60,6 +65,23 @@ public class MainActivity extends Activity {
             public void onGeolocationPermissionsShowPrompt(String origin,
                     android.webkit.GeolocationPermissions.Callback callback) {
                 callback.invoke(origin, true, false);
+            }
+
+            // bikin <input type=file> (tombol "Pilih Logo") buka file picker
+            @Override
+            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> cb,
+                    FileChooserParams params) {
+                if (filePathCallback != null) { filePathCallback.onReceiveValue(null); }
+                filePathCallback = cb;
+                try {
+                    Intent intent = params.createIntent();
+                    intent.setType("image/*");
+                    startActivityForResult(Intent.createChooser(intent, "Pilih Logo"), REQ_FILE);
+                } catch (Exception e) {
+                    filePathCallback = null;
+                    return false;
+                }
+                return true;
             }
 
             @Override
@@ -123,6 +145,26 @@ public class MainActivity extends Activity {
                 pendingReq.deny();
             }
             pendingReq = null;
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_FILE) {
+            if (filePathCallback == null) return;
+            Uri[] results = null;
+            if (resultCode == RESULT_OK && data != null) {
+                if (data.getDataString() != null) {
+                    results = new Uri[]{ Uri.parse(data.getDataString()) };
+                } else if (data.getClipData() != null) {
+                    int n = data.getClipData().getItemCount();
+                    results = new Uri[n];
+                    for (int i = 0; i < n; i++) results[i] = data.getClipData().getItemAt(i).getUri();
+                }
+            }
+            filePathCallback.onReceiveValue(results);
+            filePathCallback = null;
         }
     }
 
