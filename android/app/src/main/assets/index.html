@@ -139,13 +139,13 @@
   .thumbBtn .cnt{position:absolute;transform:translate(18px,-26px);background:var(--accent);
     color:#fff;font-size:11px;font-weight:800;border-radius:999px;padding:1px 6px;border:1.5px solid #000}
 
-  /* Session gallery modal */
+  /* Session gallery */
   #galModal{position:absolute;inset:0;z-index:28;display:none;flex-direction:column;background:#0b0f17}
   #galModal.open{display:flex}
-  .galBar{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;
-    padding-top:max(14px,env(safe-area-inset-top));border-bottom:1px solid var(--line)}
-  .galBar b{font-size:16px}
-  .galBar button{background:none;border:none;color:#fff;font-size:20px;width:40px;height:40px}
+  .galBar{display:flex;align-items:center;justify-content:space-between;
+    padding:12px 8px;padding-top:max(12px,env(safe-area-inset-top));border-bottom:1px solid var(--line)}
+  .galBar b{font-size:15px}
+  .galBar button{background:none;border:none;color:#fff;font-size:22px;width:44px;height:44px}
   #galGrid{flex:1;overflow:auto;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:6px}
   .galCell{position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;background:#1b2233}
   .galCell img{width:100%;height:100%;object-fit:cover}
@@ -153,12 +153,26 @@
     background:linear-gradient(transparent,#000c);padding:8px 5px 3px;white-space:nowrap;
     overflow:hidden;text-overflow:ellipsis}
   #galEmpty{padding:40px 24px;text-align:center;color:var(--muted);font-size:14px;line-height:1.5}
-  /* lightbox */
-  #galView{position:absolute;inset:0;z-index:29;display:none;flex-direction:column;
-    align-items:center;justify-content:center;background:#000e;padding:16px}
+  /* lightbox (full viewer) */
+  #galView{position:absolute;inset:0;z-index:29;display:none;flex-direction:column;background:#000}
   #galView.open{display:flex}
-  #galImg{max-width:100%;max-height:80%;border-radius:10px}
-  #galName{color:#fff;margin-top:12px;font-weight:700;text-align:center;word-break:break-all}
+  #galView .galBar{border-bottom:1px solid #ffffff22}
+  #galDel{color:#ff7a7a}
+  #galStage{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;
+    overflow:hidden;touch-action:pan-y}
+  #galImg{max-width:100%;max-height:100%;object-fit:contain;-webkit-user-drag:none;user-select:none}
+  #galName{color:#fff;padding:12px 16px;padding-bottom:max(12px,env(safe-area-inset-bottom));
+    font-weight:600;text-align:center;word-break:break-all;font-size:14px}
+  .galHint{color:var(--muted);font-size:11px;font-weight:400}
+
+  /* Custom confirm */
+  #confirmModal{position:absolute;inset:0;z-index:32;display:none;align-items:center;
+    justify-content:center;background:#000b;padding:24px}
+  #confirmModal.open{display:flex}
+  .confirmCard{background:var(--panel);border:1px solid var(--line);border-radius:16px;
+    padding:20px;width:100%;max-width:320px}
+  #confirmMsg{font-size:15px;line-height:1.5;margin-bottom:16px}
+  .confirmBtns{display:flex;gap:10px}
 </style>
 </head>
 <body>
@@ -212,12 +226,29 @@
     <div class="galBar">
       <button id="galClose">✕</button>
       <b id="galTitle">Foto sesi ini</b>
-      <span style="width:40px"></span>
+      <span style="width:44px"></span>
     </div>
     <div id="galGrid"></div>
-    <div id="galView">
-      <img id="galImg" alt="">
-      <div id="galName"></div>
+  </div>
+  <!-- Lightbox viewer -->
+  <div id="galView">
+    <div class="galBar">
+      <button id="galBack">←</button>
+      <b id="galPos"></b>
+      <button id="galDel">🗑</button>
+    </div>
+    <div id="galStage"><img id="galImg" alt=""></div>
+    <div id="galName"></div>
+  </div>
+
+  <!-- Custom confirm -->
+  <div id="confirmModal">
+    <div class="confirmCard">
+      <div id="confirmMsg"></div>
+      <div class="confirmBtns">
+        <button class="btn ghost" id="confirmNo">Batal</button>
+        <button class="btn" id="confirmYes" style="background:var(--danger)">Hapus</button>
+      </div>
     </div>
   </div>
 
@@ -497,8 +528,8 @@ wmFile.addEventListener('change', e=>{
   e.target.value='';
 });
 wmOn.addEventListener('change', ()=>localStorage.setItem('so_wm_on', wmOn.checked?'1':'0'));
-$('#setBtn').onclick  = ()=>wmModal.classList.add('open');
-$('#wmClose').onclick = ()=>wmModal.classList.remove('open');
+$('#setBtn').onclick  = ()=>{ wmModal.classList.add('open'); pushModal(()=>wmModal.classList.remove('open')); };
+$('#wmClose').onclick = ()=>history.back();
 $('#wmPick').onclick  = ()=>wmFile.click();
 $('#wmDel').onclick   = ()=>{ wmImg=null; localStorage.removeItem('so_logo');
   wmOn.checked=false; localStorage.setItem('so_wm_on','0'); renderWmPreview(); showToast('Logo dihapus'); };
@@ -646,57 +677,148 @@ function exportCSV(){
 }
 $('#csvBtn').onclick = exportCSV;
 
-/* ---------- session gallery (v2.5) ---------- */
-const galleryBtn=$('#galleryBtn'), galModal=$('#galModal'), galGrid=$('#galGrid'),
-      galView=$('#galView'), galImg=$('#galImg'), galName=$('#galName'), galTitle=$('#galTitle');
-const GAL_MAX=30;
-let gallery=[];
-try{ gallery=JSON.parse(localStorage.getItem('so_gallery')||'[]'); }catch(e){ gallery=[]; }
+/* ---------- modal back-stack (Android back button menutup modal, bukan keluar app) ---------- */
+let modalStack=[];
+function pushModal(closeFn){ modalStack.push(closeFn); try{ history.pushState({m:modalStack.length},''); }catch(e){} }
+window.addEventListener('popstate', ()=>{ const fn=modalStack.pop(); if(fn){ try{ fn(); }catch(e){} } });
 
-function makeThumb(canvas, maxW){
-  const r=maxW/canvas.width, w=Math.min(maxW,canvas.width), h=Math.round(canvas.height*(w/canvas.width));
-  const c=document.createElement('canvas'); c.width=w; c.height=h;
-  c.getContext('2d').drawImage(canvas,0,0,w,h);
-  return c.toDataURL('image/jpeg',0.55);
+/* ---------- custom confirm (biar ga muncul popup "appassets says") ---------- */
+let _confirmRes=null;
+function customConfirm(msg){
+  $('#confirmMsg').textContent=msg; $('#confirmModal').classList.add('open');
+  return new Promise(res=>{ _confirmRes=res; });
 }
-function pushGallery(name){
+function _confirmDone(v){ $('#confirmModal').classList.remove('open'); const r=_confirmRes; _confirmRes=null; if(r) r(v); }
+$('#confirmYes').onclick=()=>_confirmDone(true);
+$('#confirmNo').onclick =()=>_confirmDone(false);
+
+/* ---------- session gallery (v2.6, IndexedDB full-res) ---------- */
+const galleryBtn=$('#galleryBtn'), galModal=$('#galModal'), galGrid=$('#galGrid'),
+      galView=$('#galView'), galImg=$('#galImg'), galName=$('#galName'),
+      galTitle=$('#galTitle'), galPos=$('#galPos'), galStage=$('#galStage');
+const GAL_MAX=50;
+
+// --- IndexedDB ---
+let _db=null;
+function idb(){
+  if(_db) return Promise.resolve(_db);
+  return new Promise((res,rej)=>{
+    const r=indexedDB.open('snapname',1);
+    r.onupgradeneeded=e=>{ const d=e.target.result; if(!d.objectStoreNames.contains('photos')) d.createObjectStore('photos',{keyPath:'id'}); };
+    r.onsuccess=e=>{ _db=e.target.result; res(_db); };
+    r.onerror=()=>rej(r.error);
+  });
+}
+async function idbAdd(rec){ const d=await idb(); return new Promise((res,rej)=>{ const t=d.transaction('photos','readwrite'); t.objectStore('photos').put(rec); t.oncomplete=res; t.onerror=()=>rej(t.error); }); }
+async function idbDel(id){ const d=await idb(); return new Promise((res,rej)=>{ const t=d.transaction('photos','readwrite'); t.objectStore('photos').delete(id); t.oncomplete=res; t.onerror=()=>rej(t.error); }); }
+async function idbAll(){ const d=await idb(); return new Promise((res,rej)=>{ const t=d.transaction('photos','readonly'); const q=t.objectStore('photos').getAll(); q.onsuccess=()=>res((q.result||[]).sort((a,b)=>a.time-b.time)); q.onerror=()=>rej(q.error); }); }
+
+function canvasToBlob(canvas, maxW, q){
+  return new Promise(res=>{
+    if(!maxW || maxW>=canvas.width){ canvas.toBlob(b=>res(b),'image/jpeg',q); return; }
+    const w=maxW, h=Math.round(canvas.height*(w/canvas.width));
+    const c=document.createElement('canvas'); c.width=w; c.height=h;
+    c.getContext('2d').drawImage(canvas,0,0,w,h);
+    c.toBlob(b=>res(b),'image/jpeg',q);
+  });
+}
+async function pushGallery(name, uri){
   try{
-    gallery.push({thumb:makeThumb(shot,420), name, time:Date.now()});
-    if(gallery.length>GAL_MAX) gallery=gallery.slice(-GAL_MAX);
-    try{ localStorage.setItem('so_gallery', JSON.stringify(gallery)); }
-    catch(e){ gallery=gallery.slice(-Math.floor(GAL_MAX/2));
-      try{ localStorage.setItem('so_gallery', JSON.stringify(gallery)); }catch(_){} }
-    updateThumbBtn();
+    const full=await canvasToBlob(shot, 0, 0.9);     // full-res -> tajam di viewer
+    const thumb=await canvasToBlob(shot, 400, 0.6);  // kecil -> grid & thumbnail
+    await idbAdd({ id: Date.now()+'_'+Math.random().toString(36).slice(2,7),
+      name, time:Date.now(), uri:uri||'', full, thumb });
+    // batasi jumlah
+    const all=await idbAll();
+    if(all.length>GAL_MAX){ for(const r of all.slice(0, all.length-GAL_MAX)) await idbDel(r.id); }
+    await refreshThumbBtn();
   }catch(e){}
 }
-function updateThumbBtn(){
-  if(gallery.length){
-    galleryBtn.style.backgroundImage='url('+gallery[gallery.length-1].thumb+')';
+
+let thumbUrl=null;
+async function refreshThumbBtn(){
+  let all=[]; try{ all=await idbAll(); }catch(e){}
+  if(thumbUrl){ URL.revokeObjectURL(thumbUrl); thumbUrl=null; }
+  if(all.length){
+    thumbUrl=URL.createObjectURL(all[all.length-1].thumb);
+    galleryBtn.style.backgroundImage='url('+thumbUrl+')';
     galleryBtn.classList.remove('empty');
-    galleryBtn.innerHTML='<span class="cnt">'+gallery.length+'</span>';
+    galleryBtn.innerHTML='<span class="cnt">'+all.length+'</span>';
   } else { galleryBtn.style.backgroundImage=''; galleryBtn.classList.add('empty'); galleryBtn.innerHTML=''; }
 }
-function openGallery(){
-  galTitle.textContent='Foto sesi ini ('+gallery.length+')';
+
+// --- grid + lightbox ---
+let galRecs=[], gridUrls=[], viewUrl=null, viewIdx=0;
+function renderGrid(){
+  gridUrls.forEach(u=>URL.revokeObjectURL(u)); gridUrls=[];
+  galTitle.textContent='Foto sesi ini ('+galRecs.length+')';
   galGrid.innerHTML='';
-  if(!gallery.length){
-    galGrid.innerHTML='<div id="galEmpty">Belum ada foto di sesi ini.<br>Semua foto tetap aman di Galeri HP (Pictures/SnapName).</div>';
-  } else {
-    for(let i=gallery.length-1;i>=0;i--){
-      const g=gallery[i], cell=document.createElement('div'); cell.className='galCell';
-      const im=document.createElement('img'); im.src=g.thumb;
-      const sp=document.createElement('span'); sp.textContent=g.name;
-      cell.appendChild(im); cell.appendChild(sp);
-      cell.onclick=()=>{ galImg.src=g.thumb; galName.textContent=g.name; galView.classList.add('open'); };
-      galGrid.appendChild(cell);
-    }
+  if(!galRecs.length){
+    galGrid.innerHTML='<div id="galEmpty">Belum ada foto.<br>Foto tetap aman di Galeri HP (Pictures/SnapName).</div>';
+    return;
   }
-  galModal.classList.add('open');
+  galRecs.forEach((g,idx)=>{
+    const url=URL.createObjectURL(g.thumb); gridUrls.push(url);
+    const cell=document.createElement('div'); cell.className='galCell';
+    const im=document.createElement('img'); im.src=url; im.loading='lazy';
+    const sp=document.createElement('span'); sp.textContent=g.name;
+    cell.appendChild(im); cell.appendChild(sp);
+    cell.onclick=()=>openLightbox(idx);
+    galGrid.appendChild(cell);
+  });
 }
+async function openGallery(){
+  let all=[]; try{ all=await idbAll(); }catch(e){}
+  galRecs=all.slice().reverse();   // terbaru dulu
+  renderGrid();
+  galModal.classList.add('open');
+  pushModal(closeGallery);
+}
+function closeGallery(){
+  galModal.classList.remove('open');
+  gridUrls.forEach(u=>URL.revokeObjectURL(u)); gridUrls=[];
+}
+function showView(i){
+  if(!galRecs.length) return;
+  viewIdx=(i+galRecs.length)%galRecs.length;
+  const g=galRecs[viewIdx];
+  if(viewUrl) URL.revokeObjectURL(viewUrl);
+  viewUrl=URL.createObjectURL(g.full);
+  galImg.src=viewUrl; galName.textContent=g.name;
+  galPos.innerHTML=(viewIdx+1)+' / '+galRecs.length+' <span class="galHint">geser ←→</span>';
+}
+function openLightbox(idx){ showView(idx); galView.classList.add('open'); pushModal(closeLightbox); }
+function closeLightbox(){ galView.classList.remove('open'); if(viewUrl){ URL.revokeObjectURL(viewUrl); viewUrl=null; } }
+
+async function delCurrent(){
+  if(!galRecs.length) return;
+  const g=galRecs[viewIdx];
+  if(!(await customConfirm('Hapus "'+g.name+'"? Foto ini hilang dari HP juga.'))) return;
+  try{ if(window.AndroidSaver && window.AndroidSaver.deletePhoto) window.AndroidSaver.deletePhoto(g.uri||''); }catch(e){}
+  try{ await idbDel(g.id); }catch(e){}
+  galRecs.splice(viewIdx,1);
+  await refreshThumbBtn();
+  renderGrid();
+  if(!galRecs.length){ history.back(); return; }   // tutup lightbox -> grid (kosong)
+  showView(Math.min(viewIdx, galRecs.length-1));
+  showToast('Foto dihapus');
+}
+
+// swipe kiri/kanan di viewer
+(function(){
+  let x0=null;
+  galStage.addEventListener('touchstart',e=>{ x0=e.touches[0].clientX; },{passive:true});
+  galStage.addEventListener('touchend',e=>{
+    if(x0==null) return; const dx=e.changedTouches[0].clientX-x0; x0=null;
+    if(Math.abs(dx)>40) showView(viewIdx + (dx<0?1:-1));
+  },{passive:true});
+})();
+
 galleryBtn.onclick=openGallery;
-$('#galClose').onclick=()=>galModal.classList.remove('open');
-galView.onclick=()=>galView.classList.remove('open');
-updateThumbBtn();
+$('#galClose').onclick=()=>history.back();
+$('#galBack').onclick =()=>history.back();
+$('#galDel').onclick  =delCurrent;
+refreshThumbBtn();
 
 $('#flipBtn').onclick = ()=>{ facing = facing==='environment'?'user':'environment'; torchOn=false; $('#torchBtn').classList.remove('on'); startCam(); };
 $('#torchBtn').onclick = async ()=>{
@@ -801,10 +923,11 @@ $('#saveBtn').onclick = ()=>{
   lastName=finalName; localStorage.setItem('so_lastname',finalName);
   // Di dalam APK (WebView) blob download ga jalan -> lewat jembatan native ke Pictures/SnapName.
   // Di browser biasa -> tetap pakai <a download> ke folder Download.
+  let savedUri='';
   if(window.AndroidSaver && window.AndroidSaver.savePhoto){
     const la = (exifOn && shotPos) ? String(shotPos.coords.latitude)  : '';
     const lo = (exifOn && shotPos) ? String(shotPos.coords.longitude) : '';
-    try{ window.AndroidSaver.savePhoto(shot.toDataURL('image/jpeg',0.92), finalName+'.jpg', la, lo); }
+    try{ savedUri = window.AndroidSaver.savePhoto(shot.toDataURL('image/jpeg',0.92), finalName+'.jpg', la, lo) || ''; }
     catch(e){ showToast('Gagal simpan: '+e.message); return; }
   } else {
     const a=document.createElement('a');
@@ -814,7 +937,7 @@ $('#saveBtn').onclick = ()=>{
   count++; countEl.textContent=count;
   localStorage.setItem('so_count', count); localStorage.setItem('so_count_date', todayStr());
   logPhoto(finalName+'.jpg');
-  pushGallery(finalName+'.jpg');
+  pushGallery(finalName+'.jpg', savedUri);
   closeSheet();
   showToast((dup?'⚠ nama dobel → ':'✓ ')+finalName+'.jpg');
 };

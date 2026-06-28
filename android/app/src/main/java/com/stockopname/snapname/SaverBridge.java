@@ -38,7 +38,7 @@ public class SaverBridge {
     }
 
     @JavascriptInterface
-    public void savePhoto(String dataUrl, String name, String lat, String lon) {
+    public String savePhoto(String dataUrl, String name, String lat, String lon) {
         try {
             int comma = dataUrl.indexOf(',');
             String b64 = comma >= 0 ? dataUrl.substring(comma + 1) : dataUrl;
@@ -60,7 +60,7 @@ public class SaverBridge {
                 v.put(MediaStore.Images.Media.IS_PENDING, 1);
                 Uri uri = ctx.getContentResolver()
                         .insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
-                if (uri == null) { toast("Gagal bikin file"); return; }
+                if (uri == null) { toast("Gagal bikin file"); return ""; }
                 OutputStream os = ctx.getContentResolver().openOutputStream(uri);
                 os.write(bytes); os.flush(); os.close();
                 if (hasGeo) {
@@ -75,6 +75,8 @@ public class SaverBridge {
                 ContentValues done = new ContentValues();
                 done.put(MediaStore.Images.Media.IS_PENDING, 0);
                 ctx.getContentResolver().update(uri, done, null, null);
+                toast("Tersimpan ke Pictures/" + sub + (hasGeo ? "  📍" : ""));
+                return uri.toString();
             } else {
                 File dir = new File(
                         Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), sub);
@@ -89,11 +91,26 @@ public class SaverBridge {
                         exif.saveAttributes();
                     } catch (Exception ex) { /* EXIF opsional */ }
                 }
+                toast("Tersimpan ke Pictures/" + sub + (hasGeo ? "  📍" : ""));
+                return f.getAbsolutePath();
             }
-            toast("Tersimpan ke Pictures/" + sub + (hasGeo ? "  📍" : ""));
         } catch (Exception e) {
             toast("Gagal simpan: " + e.getMessage());
+            return "";
         }
+    }
+
+    /** Hapus foto dari penyimpanan (dipanggil dari galeri in-app). */
+    @JavascriptInterface
+    public void deletePhoto(String uriOrPath) {
+        try {
+            if (uriOrPath == null || uriOrPath.isEmpty()) return;
+            if (uriOrPath.startsWith("content")) {
+                ctx.getContentResolver().delete(Uri.parse(uriOrPath), null, null);
+            } else {
+                new File(uriOrPath).delete();
+            }
+        } catch (Exception e) { /* abaikan */ }
     }
 
     /** Simpan teks (CSV log) ke Documents/SnapName. */
