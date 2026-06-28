@@ -17,3 +17,7 @@ __pycache__/
 # OS
 Thumbs.db
 .DS_Store
+
+# scratch / preview renders
+_pv_*.png
+_qa_*.png
