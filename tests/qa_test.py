@@ -2,7 +2,7 @@ import sys, time, http.server, socketserver, threading, os, functools
 sys.stdout.reconfigure(encoding="utf-8")
 
 PORT = 8077
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # parent of tests/
 
 Handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=ROOT)
 httpd = socketserver.TCPServer(("127.0.0.1", PORT), Handler)
