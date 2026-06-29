@@ -33,6 +33,8 @@
     border-radius:999px;padding:7px 13px;font-size:13px;font-weight:600;display:flex;
     align-items:center;gap:7px}
   .pill b{color:var(--ok)}
+  .pill.warn{display:none;background:#e0524bd9;border-color:#ff8a8a}
+  .pill.warn.show{display:flex}
   .iconbtn{width:42px;height:42px;border-radius:50%;background:#0009;border:1px solid #ffffff22;
     color:#fff;font-size:19px;display:flex;align-items:center;justify-content:center}
   .iconbtn:active{transform:scale(.92)}
@@ -121,6 +123,13 @@
   .setHead{font-size:14px;font-weight:700;color:var(--txt);margin:4px 0 6px}
   .setNote{font-size:12px;color:var(--muted);line-height:1.45}
   .setDiv{border:none;border-top:1px solid var(--line);margin:16px 0}
+  .setSelect{margin-top:8px;width:100%;background:#0e1320;border:1.5px solid var(--line);
+    border-radius:10px;color:var(--txt);padding:11px 12px;font-size:15px}
+  #chipEditor{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .chipTag{display:inline-flex;align-items:center;gap:6px;background:#0e1320;border:1px solid var(--line);
+    border-radius:999px;padding:7px 10px 7px 12px;font-size:13px}
+  .chipTag b{font-weight:600}
+  .chipTag .x{color:var(--danger);font-weight:800;cursor:pointer;font-size:15px;line-height:1}
   #wmPreview{height:96px;border:1px dashed var(--line);border-radius:12px;margin-bottom:14px;
     display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px;
     background:repeating-conic-gradient(#1b2233 0% 25%,#141a26 0% 50%) 50%/18px 18px}
@@ -186,7 +195,10 @@
     <div id="toast"></div>
 
     <div id="topbar">
-      <div class="pill">📸 Sesi: <b id="count">0</b><span id="limit"></span></div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div class="pill">📸 Sesi: <b id="count">0</b><span id="limit"></span></div>
+        <div id="warnPill" class="pill warn"></div>
+      </div>
       <div style="display:flex;gap:10px">
         <button class="iconbtn" id="gpsBtn" title="Stempel lokasi GPS">📍</button>
         <button class="iconbtn" id="setBtn" title="Pengaturan">⚙️</button>
@@ -257,11 +269,27 @@
     <div class="wmCard">
       <h3>⚙️ Pengaturan</h3>
 
-      <div class="setHead">📍 Stempel Lokasi</div>
-      <label class="wmRow"><input type="checkbox" id="gpsOnCb"> Stempel lokasi GPS + tanggal/jam di foto</label>
+      <div class="setHead">📍 Stempel di Foto</div>
+      <label class="wmRow" style="display:block">Mode stempel:
+        <select id="stampModeSel" class="setSelect">
+          <option value="off">Mati</option>
+          <option value="time">Tanggal/Jam saja</option>
+          <option value="gps">GPS + Tanggal/Jam</option>
+        </select>
+      </label>
       <label class="wmRow"><input type="checkbox" id="exifOnCb"> Tanam koordinat ke file (EXIF) — bisa dibuka di Maps lewat Galeri</label>
       <div class="setNote">Koordinat &amp; waktu jalan offline. Alamat &amp; peta cuma muncul kalau ada sinyal.
         EXIF = lokasi nempel di file foto (hati-hati kalau share foto mentah ke luar).</div>
+
+      <hr class="setDiv">
+      <div class="setHead">🏷️ Chip Cepat (1-tap di layar nama)</div>
+      <div class="setNote">Tombol cepat buat nambah teks ke nama (mis. kondisi aset). Bisa tambah/hapus sendiri.</div>
+      <div id="chipEditor"></div>
+      <div class="inrow" style="margin-top:8px">
+        <input id="chipNew" type="text" placeholder="Tambah chip (mis. Gudang-A)" autocomplete="off"
+          style="flex:1;background:#0e1320;border:1.5px solid var(--line);border-radius:10px;color:var(--txt);padding:11px 12px;font-size:14px;outline:none">
+        <button class="btn ghost" id="chipAdd" style="flex:0 0 84px">Tambah</button>
+      </div>
 
       <hr class="setDiv">
       <div class="setHead">🏷️ Watermark Logo</div>
@@ -318,6 +346,9 @@ let usedNames=new Set();   // anti-duplikat nama dalam 1 sesi
 let dupCount=new Map();    // hitungan terakhir per nama -> dedupe O(1)
 let blobReady=false;       // true kalau blob foto SAAT INI sudah jadi
 let lastName = localStorage.getItem('so_lastname') || '';
+// Chip cepat (1-tap) — bisa diatur sendiri di Pengaturan. Default: kondisi aset.
+let quickChips = (()=>{ try{ return JSON.parse(localStorage.getItem('so_chips')||'null'); }catch(e){ return null; } })() || ['Baik','Rusak','Hilang'];
+let sheetTags = [];        // chip yang dipakai utk foto saat ini -> masuk log
 
 // Counter "Sesi" di-reset per HARI (otomatis nol pas ganti tanggal,
 // tapi tetap keinget walau app ditutup-buka di hari yang sama).
@@ -364,7 +395,7 @@ async function startCam(){
     $('#start').style.display='none';
     checkTorch();
     initCamControls();
-    if(gpsOn || exifOn) startGeo();
+    if(stampMode==='gps' || exifOn) startGeo();
   }catch(e){
     $('#startErr').textContent='Kamera ga bisa dibuka: '+e.message+
       '. Pastikan izin kamera diizinkan.';
@@ -535,23 +566,51 @@ $('#wmDel').onclick   = ()=>{ wmImg=null; localStorage.removeItem('so_logo');
   wmOn.checked=false; localStorage.setItem('so_wm_on','0'); renderWmPreview(); showToast('Logo dihapus'); };
 loadWmFromStore();
 
+/* ---------- chip cepat configurable (v2.7) ---------- */
+function saveChips(){ try{ localStorage.setItem('so_chips', JSON.stringify(quickChips)); }catch(e){} }
+function renderChipEditor(){
+  const el=$('#chipEditor'); el.innerHTML='';
+  if(!quickChips.length){ el.innerHTML='<span class="setNote">Belum ada chip.</span>'; return; }
+  quickChips.forEach((c,i)=>{
+    const t=document.createElement('span'); t.className='chipTag';
+    const b=document.createElement('b'); b.textContent=c;
+    const x=document.createElement('span'); x.className='x'; x.textContent='×';
+    x.onclick=()=>{ quickChips.splice(i,1); saveChips(); renderChipEditor(); };
+    t.appendChild(b); t.appendChild(x); el.appendChild(t);
+  });
+}
+$('#chipAdd').onclick=()=>{
+  const v=$('#chipNew').value.trim().replace(/[\\/:*?"<>|]+/g,'').replace(/\s+/g,'-');
+  if(!v) return;
+  if(!quickChips.includes(v)) quickChips.push(v);
+  saveChips(); $('#chipNew').value=''; renderChipEditor();
+};
+$('#chipNew').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); $('#chipAdd').click(); }});
+renderChipEditor();
+
 /* ---------- GPS + date/time stamp (v2.2) ---------- */
-const gpsBtn=$('#gpsBtn'), gpsOnCb=$('#gpsOnCb'), exifOnCb=$('#exifOnCb'), mapsLink=$('#mapsLink');
-let gpsOn = localStorage.getItem('so_gps_on')==='1';
+const gpsBtn=$('#gpsBtn'), stampModeSel=$('#stampModeSel'), exifOnCb=$('#exifOnCb'), mapsLink=$('#mapsLink');
+// stampMode: 'off' | 'time' (tanggal/jam saja) | 'gps' (GPS + tanggal/jam)
+let stampMode = localStorage.getItem('so_stamp_mode');
+if(stampMode===null) stampMode = (localStorage.getItem('so_gps_on')==='1') ? 'gps' : 'off';  // migrasi
 let exifOn = localStorage.getItem('so_exif_on')!=='0';   // default ON
 let lastPos=null, lastAddr='', geoWatch=null, lastGeoKey='', shotPos=null;
+const STAMP_LABEL={off:'Mati', time:'Tanggal/Jam', gps:'GPS + Tanggal/Jam'};
 
 function reflectGps(){
-  gpsBtn.classList.toggle('on', gpsOn);
-  gpsOnCb.checked = gpsOn;
+  gpsBtn.classList.toggle('on', stampMode!=='off');
+  gpsBtn.textContent = stampMode==='time' ? '🕒' : '📍';
+  if(stampModeSel) stampModeSel.value = stampMode;
   exifOnCb.checked = exifOn;
 }
-function setGps(on){
-  gpsOn=on; localStorage.setItem('so_gps_on', on?'1':'0'); reflectGps();
-  if(on){ startGeo(); showToast('Stempel lokasi: ON'); } else showToast('Stempel lokasi: OFF');
+function setStamp(m){
+  stampMode=m; localStorage.setItem('so_stamp_mode', m); reflectGps();
+  if(m==='gps' || exifOn) startGeo();
+  showToast('Stempel: '+STAMP_LABEL[m]);
 }
-gpsBtn.onclick = ()=>setGps(!gpsOn);
-gpsOnCb.addEventListener('change', ()=>setGps(gpsOnCb.checked));
+const STAMP_ORDER=['off','time','gps'];
+gpsBtn.onclick = ()=>setStamp(STAMP_ORDER[(STAMP_ORDER.indexOf(stampMode)+1)%3]);
+stampModeSel.addEventListener('change', ()=>setStamp(stampModeSel.value));
 exifOnCb.addEventListener('change', ()=>{
   exifOn=exifOnCb.checked; localStorage.setItem('so_exif_on', exifOn?'1':'0');
   if(exifOn) startGeo();
@@ -603,40 +662,42 @@ function wrapText(ctx,text,maxW){
 }
 // banner stempel di BAWAH foto (ala GPS Map Camera, dioptimalkan offline)
 function drawStamp(ctx, w, h){
-  if(!gpsOn) return;
+  if(stampMode==='off') return;
   const now=new Date();
   const fs=Math.max(18, Math.round(w*0.026));
   const lh=Math.round(fs*1.34), pad=Math.round(fs*0.9);
-  // badge kiri (pin + GPS) ukuran kotak
   const badge=Math.round(fs*3.6);
   const textX0=pad+badge+pad;
   const maxTextW=w-textX0-pad;
-  // susun baris teks
+  let head, body=[], badgeIcon, badgeLabel;
+  if(stampMode==='time'){
+    head='Tanggal & Waktu'; body=[stampDateStr(now)]; badgeIcon='🕒'; badgeLabel='WAKTU';
+  } else {  // 'gps'
+    badgeIcon='📍'; badgeLabel='GPS';
+    ctx.font='700 '+Math.round(fs*1.12)+'px system-ui,Arial';
+    head = lastAddr ? lastAddr.split(',').slice(0,2).join(', ').trim() : 'Lokasi GPS';
+    ctx.font=fs+'px system-ui,Arial';
+    if(lastAddr) wrapText(ctx, lastAddr, maxTextW).slice(0,2).forEach(l=>body.push(l));
+    if(lastPos){ const c=lastPos.coords;
+      body.push('Lat '+c.latitude.toFixed(6)+'°  Long '+c.longitude.toFixed(6)+'°  (±'+Math.round(c.accuracy)+'m)');
+    } else body.push('Mencari lokasi… pastikan GPS aktif');
+    body.push(stampDateStr(now));
+  }
   ctx.font='700 '+Math.round(fs*1.12)+'px system-ui,Arial';
-  const head = lastAddr ? lastAddr.split(',').slice(0,2).join(', ').trim() : 'Lokasi GPS';
   const headLines = wrapText(ctx, head, maxTextW).slice(0,1);
-  ctx.font=fs+'px system-ui,Arial';
-  const body=[];
-  if(lastAddr) wrapText(ctx, lastAddr, maxTextW).slice(0,2).forEach(l=>body.push(l));
-  if(lastPos){ const c=lastPos.coords;
-    body.push('Lat '+c.latitude.toFixed(6)+'°  Long '+c.longitude.toFixed(6)+'°  (±'+Math.round(c.accuracy)+'m)');
-  } else body.push('Mencari lokasi… pastikan GPS aktif');
-  body.push(stampDateStr(now));
   const textH = headLines.length*Math.round(lh*1.12) + body.length*lh;
   const bannerH = Math.max(badge, textH) + pad*2;
   const y0 = h - bannerH;
-  // background
-  ctx.fillStyle='rgba(0,0,0,0.55)';
-  ctx.fillRect(0, y0, w, bannerH);
+  ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(0, y0, w, bannerH);
   // badge
   const bx=pad, by=y0+(bannerH-badge)/2;
   ctx.fillStyle='rgba(255,255,255,0.12)';
   roundRect(ctx,bx,by,badge,badge,Math.round(badge*0.16)); ctx.fill();
   ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.font=Math.round(badge*0.42)+'px system-ui,Arial';
-  ctx.fillText('📍', bx+badge/2, by+badge*0.42);
+  ctx.fillText(badgeIcon, bx+badge/2, by+badge*0.42);
   ctx.font='700 '+Math.round(badge*0.2)+'px system-ui,Arial';
-  ctx.fillText('GPS', bx+badge/2, by+badge*0.78);
+  ctx.fillText(badgeLabel, bx+badge/2, by+badge*0.78);
   // teks
   ctx.textAlign='left'; ctx.textBaseline='top';
   let ty=y0+pad;
@@ -652,10 +713,10 @@ function roundRect(ctx,x,y,w,h,r){
 }
 
 /* ---------- log CSV (v2.2) ---------- */
-function logPhoto(file){
+function logPhoto(file, tags){
   const now=new Date(), c=lastPos&&lastPos.coords;
   const log=JSON.parse(localStorage.getItem('so_log')||'[]');
-  log.push({ file, time:now.toISOString(),
+  log.push({ file, time:now.toISOString(), tags:tags||'',
     lat:c?c.latitude:'', lon:c?c.longitude:'', acc:c?Math.round(c.accuracy):'', addr:lastAddr||'' });
   try{ localStorage.setItem('so_log', JSON.stringify(log)); }catch(e){}
 }
@@ -663,8 +724,8 @@ function exportCSV(){
   const log=JSON.parse(localStorage.getItem('so_log')||'[]');
   if(!log.length){ showToast('Belum ada data foto'); return; }
   const esc=s=>'"'+String(s).replace(/"/g,'""')+'"';
-  let csv='Nama File,Waktu,Latitude,Longitude,Akurasi(m),Alamat\n';
-  log.forEach(e=>{ csv+=[e.file,e.time,e.lat,e.lon,e.acc,e.addr].map(esc).join(',')+'\n'; });
+  let csv='Nama File,Waktu,Tag,Latitude,Longitude,Akurasi(m),Alamat\n';
+  log.forEach(e=>{ csv+=[e.file,e.time,e.tags||'',e.lat,e.lon,e.acc,e.addr].map(esc).join(',')+'\n'; });
   const fname='SnapName-log-'+todayStr()+'.csv';
   if(window.AndroidSaver && window.AndroidSaver.saveText){
     window.AndroidSaver.saveText(csv, fname);
@@ -875,23 +936,25 @@ function suggestName(){
   }
   return base;
 }
+function appendChip(c){
+  nameInput.value = (nameInput.value + (nameInput.value?'_':'') + c).replace(/_+/g,'_');
+  if(!sheetTags.includes(c)) sheetTags.push(c);
+  nameInput.focus();
+}
 function buildChips(){
   const row=$('#suggestRow'); row.innerHTML='';
   const now=new Date();
   const stamp = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
-  const chips=[];
-  chips.push(stamp);
-  chips.push('Gudang-');
-  chips.push('Kondisi-Baik');
+  const chips=[stamp, ...quickChips];   // chip tanggal (auto) + chip konfigurasi user
   chips.forEach(c=>{
     const b=document.createElement('button'); b.className='chip'; b.textContent='+ '+c;
-    b.onclick=()=>{ nameInput.value=(nameInput.value+ (nameInput.value?'-':'') + c).replace(/--+/g,'-');
-      nameInput.focus(); };
+    b.onclick=()=>appendChip(c);
     row.appendChild(b);
   });
 }
 function openSheet(){
   sheet.classList.add('open');
+  sheetTags = [];
   nameInput.value = suggestName();
   buildChips();
   // tampilkan tombol Maps kalau foto ini punya titik GPS
@@ -905,9 +968,10 @@ $('#retakeBtn').onclick = closeSheet;
 
 $('#saveBtn').onclick = ()=>{
   let name = nameInput.value.trim()
-    .replace(/[\\/:*?"<>|]+/g,'-')   // buang karakter ilegal
-    .replace(/\s+/g,'-')             // spasi -> strip
-    .replace(/^-+|-+$/g,'')          // rapikan strip di ujung
+    .replace(/[\\/:*?"<>|]+/g,'_')   // buang karakter ilegal
+    .replace(/\s+/g,'_')             // spasi -> underscore
+    .replace(/_+/g,'_')              // rapatkan underscore ganda
+    .replace(/^_+|_+$/g,'')          // buang underscore di ujung
     .slice(0,120);                   // batasi panjang (limit nama file Android ~255 byte)
   if(!name){ nameInput.focus(); showToast('Isi nama dulu'); return; }
   // anti race: jangan simpan kalau blob foto saat ini belum jadi (hindari file kosong/salah)
@@ -915,8 +979,8 @@ $('#saveBtn').onclick = ()=>{
   // anti-duplikat O(1): mulai dari hitungan terakhir, Set tetap menjamin benar-benar unik
   let key=name.toLowerCase(), finalName=name, dup=false;
   if(usedNames.has(key)){
-    let n=(dupCount.get(key)||1)+1; finalName=name+'-'+n;
-    while(usedNames.has(finalName.toLowerCase())){ n++; finalName=name+'-'+n; }
+    let n=(dupCount.get(key)||1)+1; finalName=name+'_'+n;
+    while(usedNames.has(finalName.toLowerCase())){ n++; finalName=name+'_'+n; }
     dupCount.set(key,n); dup=true;
   }
   usedNames.add(finalName.toLowerCase());
@@ -936,8 +1000,9 @@ $('#saveBtn').onclick = ()=>{
   }
   count++; countEl.textContent=count;
   localStorage.setItem('so_count', count); localStorage.setItem('so_count_date', todayStr());
-  logPhoto(finalName+'.jpg');
+  logPhoto(finalName+'.jpg', sheetTags.join('|'));
   pushGallery(finalName+'.jpg', savedUri);
+  if(count % 5 === 0) checkResources();   // pantau storage berkala
   closeSheet();
   showToast((dup?'⚠ nama dobel → ':'✓ ')+finalName+'.jpg');
 };
@@ -953,6 +1018,43 @@ function showToast(msg){
 }
 
 $('#startBtn').onclick = startCam;
+
+/* ---------- baterai & storage warning (v2.7) ---------- */
+const warnPill=$('#warnPill');
+let warnState={}, warnedBat={}, warnedStore=false;
+function renderWarn(){
+  const ks=Object.keys(warnState);
+  if(ks.length){ warnPill.textContent=ks.map(k=>warnState[k]).join('  '); warnPill.classList.add('show'); }
+  else warnPill.classList.remove('show');
+}
+function setWarn(key,on,text){ if(on) warnState[key]=text; else delete warnState[key]; renderWarn(); }
+async function checkResources(){
+  // STORAGE (HP) — native lebih akurat; web pakai estimate kuota origin
+  try{
+    let freeMB=null;
+    if(window.AndroidSaver && window.AndroidSaver.freeBytes){ const b=window.AndroidSaver.freeBytes(); if(b>0) freeMB=b/1048576; }
+    else if(navigator.storage && navigator.storage.estimate){ const e=await navigator.storage.estimate(); if(e.quota) freeMB=(e.quota-(e.usage||0))/1048576; }
+    if(freeMB!=null){
+      setWarn('store', freeMB<300, '⚠️ '+Math.round(freeMB)+'MB');
+      if(freeMB<300 && !warnedStore){ warnedStore=true; showToast('⚠️ Sisa storage '+Math.round(freeMB)+'MB — segera pindahkan foto'); }
+      if(freeMB>=400) warnedStore=false;
+    }
+  }catch(e){}
+  // BATERAI
+  try{
+    if(navigator.getBattery){
+      const bt=await navigator.getBattery();
+      const pct=Math.round(bt.level*100), low=!bt.charging && pct<=20;
+      setWarn('bat', low, '🔋 '+pct+'%');
+      [20,10].forEach(th=>{
+        if(!bt.charging && pct<=th && !warnedBat[th]){ warnedBat[th]=true; showToast('🔋 Baterai '+pct+'% — siapin powerbank'); }
+        if(bt.charging || pct>th+3) warnedBat[th]=false;
+      });
+    }
+  }catch(e){}
+}
+checkResources();
+setInterval(checkResources, 60000);
 
 /* service worker for offline / installable */
 if('serviceWorker' in navigator){

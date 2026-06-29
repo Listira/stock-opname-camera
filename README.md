@@ -60,6 +60,11 @@ present it runs as the full offline app; on `*.github.io` it runs as a capped de
   **GPS coordinates and timestamp work fully offline** (satellite, no signal needed); the
   street address is reverse-geocoded best-effort only when online. Native geolocation bridged
   into the WebView
+- 🏷️ **Configurable 1-tap chips** (v2.7) — quick chips (default `Baik`/`Rusak`/`Hilang`) you
+  add/remove yourself; tapping appends to the name and records a tag in the CSV log.
+  Underscore (`_`) name separator. Timestamp-only stamp mode (location optional)
+- 🔋 **Battery & storage guard** (v2.7) — warns before the phone dies or runs out of space
+  during all-day fieldwork (native `StatFs` free space + Battery Status API)
 - 🗂️ **Auto folder per day** (v2.2) — photos land in `Pictures/SnapName/YYYY-MM-DD/`
 - 📋 **CSV photo log** (v2.2) — every shot is logged (filename, time, lat/long, address) and
   exportable to a CSV for audit/rekap

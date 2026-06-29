@@ -81,7 +81,7 @@ with sync_playwright() as p:
         page.click("#saveBtn")
     fname = di.value.suggested_filename
     check("download triggered on save", bool(fname), fname)
-    check("filename sanitized", fname=="Laptop-Acer-Gudang-A.jpg", fname)
+    check("filename sanitized (underscore separator)", fname=="Laptop_Acer_Gudang_A.jpg", fname)
     check("sheet closed after save", "open" not in page.get_attribute("#sheet","class"))
     check("counter == 1", page.inner_text("#count")=="1", page.inner_text("#count"))
 
@@ -102,7 +102,7 @@ with sync_playwright() as p:
     shoot(page); page.fill("#nameInput","DUPL")
     with page.expect_download() as d2: page.click("#saveBtn")
     n2=d2.value.suggested_filename
-    check("dup name auto-suffixed -2", n1=="DUPL.jpg" and n2=="DUPL-2.jpg", f"{n1} / {n2}")
+    check("dup name auto-suffixed _2", n1=="DUPL.jpg" and n2=="DUPL_2.jpg", f"{n1} / {n2}")
 
     print("\n=== CHIP APPEND ===")
     shoot(page)
@@ -186,13 +186,13 @@ with sync_playwright() as p:
 
     print("\n=== V2.2: GPS STAMP + CSV LOG (offline = coords only) ===")
     ctx.set_offline(True)   # simulasi kebun tanpa sinyal: GPS jalan, alamat/peta tidak
-    page.evaluate("setGps(true)")
+    page.evaluate("setStamp('gps')")
     gp=False
     for _ in range(60):
         if page.evaluate("!!lastPos"): gp=True; break
         time.sleep(0.05)
     check("geolocation fix received (works offline)", gp)
-    check("gps stamp enabled", page.evaluate("gpsOn")==True)
+    check("gps stamp mode active", page.evaluate("stampMode")=="gps")
     check("EXIF coords default ON", page.evaluate("exifOn")==True)
     page.click("#shutter"); page.wait_for_selector("#sheet.open", timeout=3000)
     check("Maps link shown on geotagged photo", "show" in (page.get_attribute("#mapsLink","class") or ""))
@@ -206,8 +206,32 @@ with sync_playwright() as p:
     with page.expect_download(timeout=4000) as cdl:
         page.evaluate("exportCSV()")
     check("CSV export downloads .csv", cdl.value.suggested_filename.endswith(".csv"), cdl.value.suggested_filename)
-    page.evaluate("setGps(false)")
+
+    print("\n=== V2.7: TIMESTAMP-ONLY STAMP MODE ===")
+    page.evaluate("setStamp('time')")
+    check("stamp mode = time (no GPS)", page.evaluate("stampMode")=="time")
+    page.click("#shutter"); page.wait_for_selector("#sheet.open", timeout=3000)
+    page.fill("#nameInput","TIME_ONLY")
+    with page.expect_download(timeout=4000) as tdl: page.click("#saveBtn")
+    check("capture+save works in time-only mode", tdl.value.suggested_filename=="TIME_ONLY.jpg", tdl.value.suggested_filename)
+    page.evaluate("setStamp('off')")
     ctx.set_offline(False)
+
+    print("\n=== V2.7: CONFIGURABLE CHIPS + UNDERSCORE ===")
+    page.click("#shutter"); page.wait_for_selector("#sheet.open", timeout=3000)
+    chips=page.eval_on_selector_all("#suggestRow .chip","e=>e.map(x=>x.textContent)")
+    check("default condition chips present", any("Baik" in c for c in chips) and any("Rusak" in c for c in chips), str(chips))
+    page.fill("#nameInput","Mesin")
+    page.click("#suggestRow .chip >> text=Baik")
+    check("chip appends with underscore", page.input_value("#nameInput")=="Mesin_Baik", page.input_value("#nameInput"))
+    check("chip recorded in sheetTags", "Baik" in page.evaluate("sheetTags"))
+    page.click("#retakeBtn")
+
+    print("\n=== V2.7: BATTERY/STORAGE WARN PILL ===")
+    page.evaluate("setWarn('bat', true, '🔋 9%')")
+    check("warn pill shows when low", "show" in page.get_attribute("#warnPill","class"))
+    page.evaluate("setWarn('bat', false)")
+    check("warn pill hides when cleared", "show" not in page.get_attribute("#warnPill","class"))
 
     print("\n=== V2.6: SESSION GALLERY (IndexedDB full-res, swipe, delete, back) ===")
     ok=False

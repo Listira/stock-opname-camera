@@ -94,7 +94,7 @@ with sync_playwright() as p:
     dt=time.time()-t0
     uniq=len(set(names))
     check("all 200 dup-names unique on disk", uniq==200, f"{uniq} unique")
-    check("first=SAMA.jpg, then -2..-200", names[0]=="SAMA.jpg" and names[1]=="SAMA-2.jpg" and names[-1]=="SAMA-200.jpg", f"{names[0]},{names[1]},...,{names[-1]}")
+    check("first=SAMA.jpg, then _2.._200", names[0]=="SAMA.jpg" and names[1]=="SAMA_2.jpg" and names[-1]=="SAMA_200.jpg", f"{names[0]},{names[1]},...,{names[-1]}")
     # dedupe adds ~0: per-iteration should match the automation baseline, not blow up
     check("dedupe adds no overhead (per-shot <= 1.5x baseline)", dt/200 <= s1_per*1.5, f"{dt/200*1000:.0f} vs {s1_per*1000:.0f} ms baseline")
     # pure-JS microbench: 10k same-name dedupe with the SAME O(1) algo must be trivial
@@ -116,7 +116,7 @@ with sync_playwright() as p:
     cases=[
         ("x"*2000, "very long (2000 chars) -> capped <=124"),
         ("////::::****", "all-illegal -> empty -> must be blocked"),
-        ("   ---   ", "spaces+dashes -> empty -> blocked"),
+        ("   ///   ", "spaces+illegal -> empty -> blocked"),
         ("日本語アセット-名前", "unicode/CJK"),
         ("aset😀📸🔧", "emoji"),
         ("....hidden", "leading dots"),

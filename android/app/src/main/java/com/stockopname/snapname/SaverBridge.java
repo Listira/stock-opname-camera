@@ -100,6 +100,16 @@ public class SaverBridge {
         }
     }
 
+    /** Sisa ruang penyimpanan internal (byte) — buat peringatan storage. */
+    @JavascriptInterface
+    public long freeBytes() {
+        try {
+            android.os.StatFs s = new android.os.StatFs(
+                    Environment.getExternalStorageDirectory().getPath());
+            return s.getAvailableBytes();
+        } catch (Exception e) { return -1; }
+    }
+
     /** Hapus foto dari penyimpanan (dipanggil dari galeri in-app). */
     @JavascriptInterface
     public void deletePhoto(String uriOrPath) {
