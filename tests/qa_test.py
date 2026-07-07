@@ -102,7 +102,7 @@ with sync_playwright() as p:
     shoot(page); page.fill("#nameInput","DUPL")
     with page.expect_download() as d2: page.click("#saveBtn")
     n2=d2.value.suggested_filename
-    check("dup name auto-suffixed _2", n1=="DUPL.jpg" and n2=="DUPL_2.jpg", f"{n1} / {n2}")
+    check("dup name auto-suffixed (2)", n1=="DUPL.jpg" and n2=="DUPL(2).jpg", f"{n1} / {n2}")
 
     print("\n=== CHIP APPEND ===")
     shoot(page)

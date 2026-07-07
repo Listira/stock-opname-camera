@@ -282,6 +282,18 @@
         EXIF = lokasi nempel di file foto (hati-hati kalau share foto mentah ke luar).</div>
 
       <hr class="setDiv">
+      <div class="setHead">📷 Resolusi Kamera</div>
+      <label class="wmRow" style="display:block">Resolusi foto:
+        <select id="resSel" class="setSelect">
+          <option value="720p">HD 720p (1280×720) — hemat storage</option>
+          <option value="1080p">Full HD 1080p (1920×1080)</option>
+          <option value="2k">2K (2560×1440) — default</option>
+          <option value="max">Maksimum — resolusi tertinggi kamera</option>
+        </select>
+      </label>
+      <div class="setNote">Resolusi aktif setelah kamera direstart. Resolusi lebih tinggi = file lebih besar. Kamera HP ada batasnya — kalau diminta lebih tinggi dari kemampuan, otomatis pakai yang tertinggi yang bisa.</div>
+
+      <hr class="setDiv">
       <div class="setHead">🏷️ Chip Cepat (1-tap di layar nama)</div>
       <div class="setNote">Tombol cepat buat nambah teks ke nama (mis. kondisi aset). Bisa tambah/hapus sendiri.</div>
       <div id="chipEditor"></div>
@@ -344,6 +356,13 @@ let stream=null, facing='environment', torchOn=false, track=null;
 let lastBlobUrl=null, lastBlob=null, count=0;
 let usedNames=new Set();   // anti-duplikat nama dalam 1 sesi
 let dupCount=new Map();    // hitungan terakhir per nama -> dedupe O(1)
+const CAM_RES = {
+  '720p':  {width:1280,  height:720},
+  '1080p': {width:1920,  height:1080},
+  '2k':    {width:2560,  height:1440},
+  'max':   {width:99999, height:99999},
+};
+let camRes = localStorage.getItem('so_res') || '2k';
 let blobReady=false;       // true kalau blob foto SAAT INI sudah jadi
 let lastName = localStorage.getItem('so_lastname') || '';
 // Chip cepat (1-tap) — bisa diatur sendiri di Pengaturan. Default: kondisi aset.
@@ -386,8 +405,9 @@ async function startCam(){
   }
   try{
     if(stream) stream.getTracks().forEach(t=>t.stop());
+    const rv = CAM_RES[camRes] || CAM_RES['2k'];
     stream = await navigator.mediaDevices.getUserMedia({
-      video:{ facingMode:{ideal:facing}, width:{ideal:2560}, height:{ideal:1440} },
+      video:{ facingMode:{ideal:facing}, width:{ideal:rv.width}, height:{ideal:rv.height} },
       audio:false
     });
     video.srcObject = stream;
@@ -617,6 +637,18 @@ exifOnCb.addEventListener('change', ()=>{
   showToast('Koordinat ke file (EXIF): '+(exifOn?'ON':'OFF'));
 });
 reflectGps();
+
+// Resolusi kamera
+const resSel = $('#resSel');
+if(resSel){
+  resSel.value = camRes;
+  resSel.addEventListener('change', ()=>{
+    camRes = resSel.value;
+    localStorage.setItem('so_res', camRes);
+    showToast('Resolusi disimpan — restart kamera otomatis…');
+    startCam();
+  });
+}
 
 // buka lokasi di Maps (native intent kalau di APK, else tab baru)
 function openMapsAt(lat, lon){
@@ -979,8 +1011,8 @@ $('#saveBtn').onclick = ()=>{
   // anti-duplikat O(1): mulai dari hitungan terakhir, Set tetap menjamin benar-benar unik
   let key=name.toLowerCase(), finalName=name, dup=false;
   if(usedNames.has(key)){
-    let n=(dupCount.get(key)||1)+1; finalName=name+'_'+n;
-    while(usedNames.has(finalName.toLowerCase())){ n++; finalName=name+'_'+n; }
+    let n=(dupCount.get(key)||1)+1; finalName=name+'('+n+')';
+    while(usedNames.has(finalName.toLowerCase())){ n++; finalName=name+'('+n+')'; }
     dupCount.set(key,n); dup=true;
   }
   usedNames.add(finalName.toLowerCase());
