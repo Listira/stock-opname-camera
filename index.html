@@ -112,6 +112,8 @@
     padding:16px 30px;border-radius:14px}
   .logo{font-size:46px}
   .err{color:var(--danger);font-size:13px;max-width:300px}
+  #startCredit{position:absolute;top:max(14px,env(safe-area-inset-top));right:16px;
+    text-align:right;color:var(--muted);font-size:11px;line-height:1.5;pointer-events:none}
 
   /* Watermark modal */
   #wmModal{position:absolute;inset:0;z-index:25;display:none;align-items:center;justify-content:center;
@@ -325,10 +327,11 @@
 
   <!-- Start overlay -->
   <div id="start">
+    <div id="startCredit">By Jova/Listira<br>v2.9</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
-    <button id="startBtn">Nyalakan Kamera</button>
+    <button id="startBtn">Mulai</button>
     <div class="err" id="startErr"></div>
     <div id="demoNote" style="color:#f4c84a;font-size:13px;max-width:300px"></div>
   </div>
@@ -413,6 +416,7 @@ async function startCam(){
     video.srcObject = stream;
     track = stream.getVideoTracks()[0];
     $('#start').style.display='none';
+    torchOn=false; $('#torchBtn').classList.remove('on');  // stream baru = torch fisik mati
     checkTorch();
     initCamControls();
     if(stampMode==='gps' || exifOn) startGeo();
@@ -427,6 +431,25 @@ function checkTorch(){
   const caps = track && track.getCapabilities ? track.getCapabilities() : {};
   $('#torchBtn').style.display = (caps && caps.torch) ? 'flex' : 'none';
 }
+
+// ---- FIX hang setelah Home/multitask: Android matiin kamera pas app di-background,
+// track jadi 'ended' tapi preview keliatan beku. Pas balik ke app -> restart stream.
+let camWasOn=false;
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState==='hidden'){
+    camWasOn = !!stream;
+    if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; track=null; }
+  } else if(document.visibilityState==='visible' && camWasOn){
+    // jangan restart kalau user belum pernah mulai, atau lagi milih logo (file picker juga bikin hidden)
+    startCam();
+  }
+});
+// jaga-jaga: kalau track mati sendiri (kamera direbut app lain), restart pas visible
+setInterval(()=>{
+  if(document.visibilityState==='visible' && stream && track && track.readyState==='ended'){
+    startCam();
+  }
+}, 2000);
 
 /* ---------- zoom & tap-to-focus (v2.0) ---------- */
 const focusRing=$('#focusRing'), zoomInd=$('#zoomInd');
@@ -745,15 +768,20 @@ function roundRect(ctx,x,y,w,h,r){
 }
 
 /* ---------- log CSV (v2.2) ---------- */
+function readLog(){
+  // data korup (mis. storage penuh pas nulis) jangan sampai bikin save foto gagal
+  try{ return JSON.parse(localStorage.getItem('so_log')||'[]'); }catch(e){ return []; }
+}
 function logPhoto(file, tags){
   const now=new Date(), c=lastPos&&lastPos.coords;
-  const log=JSON.parse(localStorage.getItem('so_log')||'[]');
+  let log=readLog();
   log.push({ file, time:now.toISOString(), tags:tags||'',
     lat:c?c.latitude:'', lon:c?c.longitude:'', acc:c?Math.round(c.accuracy):'', addr:lastAddr||'' });
+  if(log.length>3000) log=log.slice(-3000);  // jaga kuota localStorage (CSV per hari tetap utuh)
   try{ localStorage.setItem('so_log', JSON.stringify(log)); }catch(e){}
 }
 function exportCSV(){
-  const log=JSON.parse(localStorage.getItem('so_log')||'[]');
+  const log=readLog();
   if(!log.length){ showToast('Belum ada data foto'); return; }
   const esc=s=>'"'+String(s).replace(/"/g,'""')+'"';
   let csv='Nama File,Waktu,Tag,Latitude,Longitude,Akurasi(m),Alamat\n';

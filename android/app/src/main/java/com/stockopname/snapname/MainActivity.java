@@ -168,6 +168,26 @@ public class MainActivity extends Activity {
         }
     }
 
+    // Tanpa ini WebView (timer/JS/media) bisa nge-hang setelah app di-background lama
+    // lalu dibuka lagi dari Home/recent apps.
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (web != null) web.onPause();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (web != null) web.onResume();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (web != null) web.destroy();
+        super.onDestroy();
+    }
+
     @Override
     public void onBackPressed() {
         if (web != null && web.canGoBack()) {
