@@ -327,7 +327,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v3.0</div>
+    <div id="startCredit">By Jova/Listira<br>v3.1</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -844,10 +844,11 @@ function canvasToBlob(canvas, maxW, q){
     c.toBlob(b=>res(b),'image/jpeg',q);
   });
 }
-async function pushGallery(name, uri){
+async function pushGallery(name, uri, fullBlob){
   try{
-    const full=await canvasToBlob(shot, 0, 0.9);     // full-res -> tajam di viewer
-    const thumb=await canvasToBlob(shot, 400, 0.6);  // kecil -> grid & thumbnail
+    // pakai blob yang SUDAH ter-encode dari capture — jangan encode ulang full-res (lambat)
+    const full = fullBlob || await canvasToBlob(shot, 0, 0.9);
+    const thumb=await canvasToBlob(shot, 400, 0.6);  // kecil -> grid & thumbnail (murah)
     await idbAdd({ id: Date.now()+'_'+Math.random().toString(36).slice(2,7),
       name, time:Date.now(), uri:uri||'', full, thumb });
     // batasi jumlah
@@ -988,7 +989,7 @@ $('#shutter').onclick = ()=>{
     if(lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
     lastBlob=b; lastBlobUrl=URL.createObjectURL(b);
     blobReady=true;                // siap disimpan
-    if(pendingSave){ pendingSave=false; $('#saveBtn').click(); }  // save yang tadi diantri
+    if(pendingSave){ pendingSave=false; setSaving(false); doSave(); }  // save yang tadi diantri
   },'image/jpeg',0.92);
 };
 
@@ -1024,11 +1025,17 @@ function openSheet(){
   // Focus SINKRON dalam gesture tap shutter -> keyboard mobile muncul otomatis.
   nameInput.focus(); nameInput.select();
 }
-function closeSheet(){ sheet.classList.remove('open'); pendingSave=false; }
+function closeSheet(){ sheet.classList.remove('open'); pendingSave=false; setSaving(false); }
 
 $('#retakeBtn').onclick = closeSheet;
 
-$('#saveBtn').onclick = ()=>{
+// Feedback visual saat proses simpan (biar ga kerasa hang/error)
+function setSaving(on){
+  const b=$('#saveBtn'); b.disabled=on; b.textContent = on ? 'Menyimpan…' : 'Simpan ✓';
+}
+
+function doSave(){
+  if($('#saveBtn').disabled) return;   // lagi proses simpan -> jangan dobel
   let name = nameInput.value.trim()
     .replace(/[\\/:*?"<>|]+/g,'_')   // buang karakter ilegal
     .replace(/\s+/g,'_')             // spasi -> underscore
@@ -1037,8 +1044,7 @@ $('#saveBtn').onclick = ()=>{
     .slice(0,120);                   // batasi panjang (limit nama file Android ~255 byte)
   if(!name){ nameInput.focus(); showToast('Isi nama dulu'); return; }
   // anti race: blob foto belum jadi -> ANTRIKAN save, jalan otomatis begitu siap.
-  // (dulu ditolak + toast; sekarang user ngetik kilat pun tetap kesimpen)
-  if(!blobReady || !lastBlobUrl){ pendingSave=true; return; }
+  if(!blobReady || !lastBlobUrl){ pendingSave=true; setSaving(true); return; }
   // anti-duplikat O(1): mulai dari hitungan terakhir, Set tetap menjamin benar-benar unik
   let key=name.toLowerCase(), finalName=name, dup=false;
   if(usedNames.has(key)){
@@ -1048,30 +1054,46 @@ $('#saveBtn').onclick = ()=>{
   }
   usedNames.add(finalName.toLowerCase());
   lastName=finalName; localStorage.setItem('so_lastname',finalName);
+  const myBlob=lastBlob;   // kunci blob foto INI (jangan keganti foto berikutnya)
+  const finish=(savedUri)=>{
+    count++; countEl.textContent=count;
+    localStorage.setItem('so_count', count); localStorage.setItem('so_count_date', todayStr());
+    logPhoto(finalName+'.jpg', sheetTags.join('|'));
+    pushGallery(finalName+'.jpg', savedUri, myBlob);
+    if(count % 5 === 0) checkResources();   // pantau storage berkala
+    closeSheet();
+    showToast((dup?'⚠ nama dobel → ':'✓ ')+finalName+'.jpg');
+  };
   // Di dalam APK (WebView) blob download ga jalan -> lewat jembatan native ke Pictures/SnapName.
-  // Di browser biasa -> tetap pakai <a download> ke folder Download.
-  let savedUri='';
+  // PENTING performa: kirim blob yang SUDAH ter-encode (FileReader base64) —
+  // dulu shot.toDataURL() di sini nge-ENCODE ULANG full-res secara sinkron = layar beku lama.
   if(window.AndroidSaver && window.AndroidSaver.savePhoto){
     const la = (exifOn && shotPos) ? String(shotPos.coords.latitude)  : '';
     const lo = (exifOn && shotPos) ? String(shotPos.coords.longitude) : '';
-    try{ savedUri = window.AndroidSaver.savePhoto(shot.toDataURL('image/jpeg',0.92), finalName+'.jpg', la, lo) || ''; }
-    catch(e){ showToast('Gagal simpan: '+e.message); return; }
+    setSaving(true);
+    const fr=new FileReader();
+    fr.onload=()=>{
+      let savedUri='';
+      try{ savedUri = window.AndroidSaver.savePhoto(fr.result, finalName+'.jpg', la, lo) || ''; }
+      catch(e){
+        usedNames.delete(finalName.toLowerCase());   // rollback: nama ga hangus kalau gagal
+        setSaving(false); showToast('Gagal simpan: '+e.message); return;
+      }
+      finish(savedUri);
+    };
+    fr.onerror=()=>{ usedNames.delete(finalName.toLowerCase()); setSaving(false); showToast('Gagal baca foto'); };
+    fr.readAsDataURL(myBlob);
   } else {
     const a=document.createElement('a');
     a.href=lastBlobUrl; a.download=finalName+'.jpg';
     document.body.appendChild(a); a.click(); a.remove();
+    finish('');
   }
-  count++; countEl.textContent=count;
-  localStorage.setItem('so_count', count); localStorage.setItem('so_count_date', todayStr());
-  logPhoto(finalName+'.jpg', sheetTags.join('|'));
-  pushGallery(finalName+'.jpg', savedUri);
-  if(count % 5 === 0) checkResources();   // pantau storage berkala
-  closeSheet();
-  showToast((dup?'⚠ nama dobel → ':'✓ ')+finalName+'.jpg');
-};
+}
+$('#saveBtn').onclick = doSave;
 
 // Enter di keyboard = simpan
-nameInput.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); $('#saveBtn').click(); }});
+nameInput.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); doSave(); }});
 
 /* ---------- toast ---------- */
 let toastT;
