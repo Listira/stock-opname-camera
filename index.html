@@ -158,8 +158,9 @@
   .galBar b{font-size:15px}
   .galBar button{background:none;border:none;color:#fff;font-size:22px;width:44px;height:44px}
   #galGrid{flex:1;overflow:auto;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:6px}
-  .galCell{position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;background:#1b2233}
-  .galCell img{width:100%;height:100%;object-fit:cover}
+  /* kotak 1:1 pakai trik padding-bottom (aspect-ratio ga didukung sebagian WebView -> sel numpuk) */
+  .galCell{position:relative;height:0;padding-bottom:100%;border-radius:8px;overflow:hidden;background:#1b2233}
+  .galCell img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
   .galCell span{position:absolute;left:0;right:0;bottom:0;font-size:10px;color:#fff;
     background:linear-gradient(transparent,#000c);padding:8px 5px 3px;white-space:nowrap;
     overflow:hidden;text-overflow:ellipsis}
@@ -327,7 +328,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v3.11</div>
+    <div id="startCredit">By Jova/Listira<br>v3.12</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -1040,6 +1041,13 @@ function closeSheet(){ sheet.classList.remove('open'); pendingSave=false; setSav
 
 $('#retakeBtn').onclick = closeSheet;
 
+// Callback hasil save async dari native (SaverBridge.savePhotoAsync)
+let saveSeq=0; const savePend=new Map();
+window.__onSavedNative=(id,uri)=>{
+  const cb=savePend.get(id); if(!cb) return; savePend.delete(id);
+  if(uri) cb.done(uri); else cb.fail('gagal tulis file (cek storage)');
+};
+
 // Feedback visual saat proses simpan (biar ga kerasa hang/error)
 function setSaving(on){
   const b=$('#saveBtn'); b.disabled=on; b.textContent = on ? 'Menyimpan…' : 'Simpan ✓';
@@ -1090,8 +1098,17 @@ function doSave(){
     const lo = (exifOn && shotPos) ? String(shotPos.coords.longitude) : '';
     const fr=new FileReader();
     fr.onload=()=>{
-      try{ done(window.AndroidSaver.savePhoto(fr.result, finalName+'.jpg', la, lo) || ''); }
-      catch(e){ fail(e.message); }
+      if(window.AndroidSaver.savePhotoAsync){
+        // jalur ASYNC: tulis file di thread native terpisah -> UI ga pernah beku,
+        // save beruntun secepat apapun (nama duplikat) tetap mulus
+        const id='s'+(++saveSeq);
+        savePend.set(id,{done,fail});
+        try{ window.AndroidSaver.savePhotoAsync(fr.result, finalName+'.jpg', la, lo, id); }
+        catch(e){ savePend.delete(id); fail(e.message); }
+      } else {
+        try{ done(window.AndroidSaver.savePhoto(fr.result, finalName+'.jpg', la, lo) || ''); }
+        catch(e){ fail(e.message); }
+      }
     };
     fr.onerror=()=>fail('gagal baca foto');
     fr.readAsDataURL(myBlob);

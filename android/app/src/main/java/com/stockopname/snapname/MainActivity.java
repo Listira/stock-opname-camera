@@ -50,7 +50,9 @@ public class MainActivity extends Activity {
         ws.setAllowContentAccess(false);
 
         // Native bridge for saving photos (WebView can't download blob: URLs).
-        web.addJavascriptInterface(new SaverBridge(this), "AndroidSaver");
+        SaverBridge bridge = new SaverBridge(this);
+        bridge.setWebView(web);   // buat callback hasil save async balik ke JS
+        web.addJavascriptInterface(bridge, "AndroidSaver");
 
         web.setWebViewClient(new WebViewClient() {
             @Override

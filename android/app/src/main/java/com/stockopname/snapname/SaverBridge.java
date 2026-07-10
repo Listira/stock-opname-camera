@@ -30,15 +30,48 @@ import java.util.Locale;
 public class SaverBridge {
 
     private final Context ctx;
+    private android.webkit.WebView web;   // buat callback hasil save async ke JS
 
     SaverBridge(Context c) { this.ctx = c; }
+
+    void setWebView(android.webkit.WebView w) { this.web = w; }
+
+    private void runJs(final String js) {
+        if (web == null || !(ctx instanceof Activity)) return;
+        ((Activity) ctx).runOnUiThread(new Runnable() {
+            @Override public void run() { web.evaluateJavascript(js, null); }
+        });
+    }
 
     private String today() {
         return new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
     }
 
+    /**
+     * Simpan foto TANPA nge-blok JS thread. savePhoto() sinkron bikin UI beku
+     * selama decode+tulis+EXIF (bisa >1 detik di resolusi tinggi) — kerasa banget
+     * kalau user save cepat berturut-turut (nama duplikat = ga perlu ngetik).
+     * Hasil dikirim balik lewat window.__onSavedNative(cbId, uri) ('' = gagal).
+     */
+    @JavascriptInterface
+    public void savePhotoAsync(final String dataUrl, final String name,
+                               final String lat, final String lon, final String cbId) {
+        new Thread(new Runnable() {
+            @Override public void run() {
+                String uri = saveInner(dataUrl, name, lat, lon, true);
+                if (uri == null) uri = "";
+                runJs("window.__onSavedNative && window.__onSavedNative('"
+                        + cbId + "','" + uri.replace("\\", "\\\\").replace("'", "\\'") + "')");
+            }
+        }).start();
+    }
+
     @JavascriptInterface
     public String savePhoto(String dataUrl, String name, String lat, String lon) {
+        return saveInner(dataUrl, name, lat, lon, false);
+    }
+
+    private String saveInner(String dataUrl, String name, String lat, String lon, boolean quiet) {
         try {
             int comma = dataUrl.indexOf(',');
             String b64 = comma >= 0 ? dataUrl.substring(comma + 1) : dataUrl;
@@ -75,7 +108,7 @@ public class SaverBridge {
                 ContentValues done = new ContentValues();
                 done.put(MediaStore.Images.Media.IS_PENDING, 0);
                 ctx.getContentResolver().update(uri, done, null, null);
-                toast("Tersimpan ke Pictures/" + sub + (hasGeo ? "  📍" : ""));
+                if (!quiet) toast("Tersimpan ke Pictures/" + sub + (hasGeo ? "  📍" : ""));
                 return uri.toString();
             } else {
                 File dir = new File(
@@ -91,7 +124,7 @@ public class SaverBridge {
                         exif.saveAttributes();
                     } catch (Exception ex) { /* EXIF opsional */ }
                 }
-                toast("Tersimpan ke Pictures/" + sub + (hasGeo ? "  📍" : ""));
+                if (!quiet) toast("Tersimpan ke Pictures/" + sub + (hasGeo ? "  📍" : ""));
                 return f.getAbsolutePath();
             }
         } catch (Exception e) {
