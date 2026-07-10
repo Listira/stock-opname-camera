@@ -327,7 +327,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v2.9</div>
+    <div id="startCredit">By Jova/Listira<br>v3.0</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -367,6 +367,7 @@ const CAM_RES = {
 };
 let camRes = localStorage.getItem('so_res') || '2k';
 let blobReady=false;       // true kalau blob foto SAAT INI sudah jadi
+let pendingSave=false;     // user pencet Simpan sebelum blob jadi -> antri, auto-save pas siap
 let lastName = localStorage.getItem('so_lastname') || '';
 // Chip cepat (1-tap) — bisa diatur sendiri di Pengaturan. Default: kondisi aset.
 let quickChips = (()=>{ try{ return JSON.parse(localStorage.getItem('so_chips')||'null'); }catch(e){ return null; } })() || ['Baik','Rusak','Hilang'];
@@ -972,29 +973,30 @@ $('#shutter').onclick = ()=>{
   drawStamp(ctx, w, h);       // banner GPS + tanggal/jam di bawah (kalau aktif)
   drawWatermark(ctx, w, h);   // tempel logo di pojok kanan atas (kalau aktif)
   flash.classList.remove('fire'); void flash.offsetWidth; flash.classList.add('fire');
+  // Preview INSTAN: thumbnail kecil digambar sinkron (cepat), ga nunggu encode full-res.
+  // Tanpa ini preview masih nampilin foto SEBELUMNYA selama JPEG full-res diproses.
+  const pv=document.createElement('canvas');
+  const pw=Math.min(480,w); pv.width=pw; pv.height=Math.max(1,Math.round(h*pw/w));
+  pv.getContext('2d').drawImage(shot,0,0,pv.width,pv.height);
+  preview.style.backgroundImage=`url(${pv.toDataURL('image/jpeg',0.7)})`;
   // Buka sheet + focus SEKARANG (masih dalam gesture tap) -> keyboard HP naik sendiri.
   blobReady=false;                 // foto saat ini belum jadi
+  pendingSave=false;               // buang antrian save dari foto sebelumnya
   openSheet();
-  // Proses gambar async di belakang; preview menyusul.
+  // Encode full-res async di belakang; blob buat disimpan.
   shot.toBlob(b=>{
     if(lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
     lastBlob=b; lastBlobUrl=URL.createObjectURL(b);
-    preview.style.backgroundImage=`url(${lastBlobUrl})`;
     blobReady=true;                // siap disimpan
+    if(pendingSave){ pendingSave=false; $('#saveBtn').click(); }  // save yang tadi diantri
   },'image/jpeg',0.92);
 };
 
 /* ---------- name sheet ---------- */
 function suggestName(){
-  // kalau nama terakhir ada angka di belakang -> naikin otomatis (001 -> 002)
-  let base = lastName;
-  if(base){
-    const m = base.match(/^(.*?)(\d+)(\D*)$/);
-    if(m){ const n=(parseInt(m[2])+1).toString().padStart(m[2].length,'0'); base=m[1]+n+m[3]; }
-  } else {
-    base = '';
-  }
-  return base;
+  // isi nama terakhir apa adanya — TANPA nambah angka otomatis (annoying,
+  // apalagi kalau ujung nama itu tanggal). Kalau nama sama, sistem (2)(3) yang urus.
+  return lastName || '';
 }
 function appendChip(c){
   nameInput.value = (nameInput.value + (nameInput.value?'_':'') + c).replace(/_+/g,'_');
@@ -1004,7 +1006,7 @@ function appendChip(c){
 function buildChips(){
   const row=$('#suggestRow'); row.innerHTML='';
   const now=new Date();
-  const stamp = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+  const stamp = ''+now.getFullYear()+String(now.getMonth()+1).padStart(2,'0')+String(now.getDate()).padStart(2,'0');  // 20260707 (tanpa strip)
   const chips=[stamp, ...quickChips];   // chip tanggal (auto) + chip konfigurasi user
   chips.forEach(c=>{
     const b=document.createElement('button'); b.className='chip'; b.textContent='+ '+c;
@@ -1022,7 +1024,7 @@ function openSheet(){
   // Focus SINKRON dalam gesture tap shutter -> keyboard mobile muncul otomatis.
   nameInput.focus(); nameInput.select();
 }
-function closeSheet(){ sheet.classList.remove('open'); }
+function closeSheet(){ sheet.classList.remove('open'); pendingSave=false; }
 
 $('#retakeBtn').onclick = closeSheet;
 
@@ -1034,8 +1036,9 @@ $('#saveBtn').onclick = ()=>{
     .replace(/^_+|_+$/g,'')          // buang underscore di ujung
     .slice(0,120);                   // batasi panjang (limit nama file Android ~255 byte)
   if(!name){ nameInput.focus(); showToast('Isi nama dulu'); return; }
-  // anti race: jangan simpan kalau blob foto saat ini belum jadi (hindari file kosong/salah)
-  if(!blobReady || !lastBlobUrl){ showToast('Foto lagi diproses, sebentar…'); return; }
+  // anti race: blob foto belum jadi -> ANTRIKAN save, jalan otomatis begitu siap.
+  // (dulu ditolak + toast; sekarang user ngetik kilat pun tetap kesimpen)
+  if(!blobReady || !lastBlobUrl){ pendingSave=true; return; }
   // anti-duplikat O(1): mulai dari hitungan terakhir, Set tetap menjamin benar-benar unik
   let key=name.toLowerCase(), finalName=name, dup=false;
   if(usedNames.has(key)){

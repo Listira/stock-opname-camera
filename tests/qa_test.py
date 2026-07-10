@@ -64,13 +64,9 @@ with sync_playwright() as p:
     print("\n=== SHUTTER #1 -> NAME SHEET ===")
     shoot(page)
     check("name sheet opened", "open" in page.get_attribute("#sheet","class"))
-    # preview is set in the async toBlob callback (a few ms after sheet opens) -> poll
-    blob_ok=False
-    for _ in range(30):
-        if page.evaluate("getComputedStyle(document.querySelector('#sheetPreview')).backgroundImage.includes('blob:')"):
-            blob_ok=True; break
-        time.sleep(0.05)
-    check("preview shows captured blob", blob_ok)
+    # preview is now INSTANT (synchronous data: thumbnail drawn before sheet opens)
+    check("preview instant (data: thumb, no delay)",
+          page.evaluate("getComputedStyle(document.querySelector('#sheetPreview')).backgroundImage.includes('data:image')"))
     check("suggestion chips rendered", page.eval_on_selector_all(".chip","e=>e.length")>0)
     check("name input auto-focused",
           page.evaluate("document.activeElement && document.activeElement.id==='nameInput'"))
@@ -85,14 +81,14 @@ with sync_playwright() as p:
     check("sheet closed after save", "open" not in page.get_attribute("#sheet","class"))
     check("counter == 1", page.inner_text("#count")=="1", page.inner_text("#count"))
 
-    print("\n=== AUTO-INCREMENT SUGGESTION ===")
+    print("\n=== NAME PREFILL (no auto-increment) ===")
     shoot(page)
     page.fill("#nameInput","Aset-007")
     with page.expect_download() as d: page.click("#saveBtn")
     d.value
     shoot(page)
     sug = page.input_value("#nameInput")
-    check("auto-increment trailing number (007->008)", sug=="Aset-008", sug)
+    check("prefill = last name AS-IS (no auto +1)", sug=="Aset-007", sug)
     page.click("#retakeBtn")
 
     print("\n=== ANTI-DUPLICATE GUARD ===")
@@ -221,6 +217,8 @@ with sync_playwright() as p:
     page.click("#shutter"); page.wait_for_selector("#sheet.open", timeout=3000)
     chips=page.eval_on_selector_all("#suggestRow .chip","e=>e.map(x=>x.textContent)")
     check("default condition chips present", any("Baik" in c for c in chips) and any("Rusak" in c for c in chips), str(chips))
+    import re as _re
+    check("date chip has NO dashes (yyyymmdd)", any(_re.search(r"\+ \d{8}$", c) for c in chips), str(chips[:2]))
     page.fill("#nameInput","Mesin")
     page.click("#suggestRow .chip >> text=Baik")
     check("chip appends with underscore", page.input_value("#nameInput")=="Mesin_Baik", page.input_value("#nameInput"))

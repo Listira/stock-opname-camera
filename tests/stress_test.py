@@ -146,24 +146,29 @@ with sync_playwright() as p:
     # reload fresh so lastBlobUrl starts null -> worst case
     page.goto(f"http://127.0.0.1:{PORT}/index.html")
     assert start(page)
-    race_dl=[]
-    page.on("download", lambda d: race_dl.append(d))
-    # synchronous shutter+save in ONE evaluate: save fires before toBlob async resolves
+    # save before blob ready -> QUEUED, auto-fires exactly once when blob completes
+    with page.expect_download(timeout=3000) as di:
+        page.evaluate("""()=>{
+            document.querySelector('#shutter').click();
+            document.querySelector('#nameInput').value='RACE';
+            document.querySelector('#saveBtn').click();   // blob not ready yet -> queued
+        }""")
+    sz=os.path.getsize(di.value.path())
+    check("queued save auto-fires once blob ready (real jpeg)", sz>1024, f"{sz} bytes")
+    check("saved with correct name", di.value.suggested_filename=="RACE.jpg", di.value.suggested_filename)
+    time.sleep(0.3)
+    check("sheet closed after queued save", "open" not in page.get_attribute("#sheet","class"))
+    # retake must CANCEL a queued save (no ghost download)
+    ghost=[]
+    page.on("download", lambda d: ghost.append(d))
     page.evaluate("""()=>{
         document.querySelector('#shutter').click();
-        document.querySelector('#nameInput').value='RACE';
-        document.querySelector('#saveBtn').click();   // blob not ready yet
+        document.querySelector('#nameInput').value='GHOST';
+        document.querySelector('#saveBtn').click();   // queued
+        document.querySelector('#retakeBtn').click(); // cancel!
     }""")
-    time.sleep(0.4)
-    premature = len(race_dl)
-    sheet_still_open = "open" in page.get_attribute("#sheet","class")
-    check("no premature/empty download before blob ready", premature==0, f"{premature} downloads fired early")
-    check("save deferred, sheet stays open", sheet_still_open)
-    # now blob is ready -> saving should work
-    with page.expect_download(timeout=3000) as di:
-        page.click("#saveBtn")
-    sz=os.path.getsize(di.value.path())
-    check("save works once blob ready (real jpeg)", sz>1024, f"{sz} bytes")
+    time.sleep(0.6)
+    check("retake cancels queued save (no ghost file)", len(ghost)==0, f"{len(ghost)} ghost downloads")
 
     # ============================================================
     print("\n=== STRESS 6: CAMERA RESTART STORM (flip x30) ===")
