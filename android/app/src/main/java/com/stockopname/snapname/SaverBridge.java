@@ -76,6 +76,16 @@ public class SaverBridge {
             int comma = dataUrl.indexOf(',');
             String b64 = comma >= 0 ? dataUrl.substring(comma + 1) : dataUrl;
             byte[] bytes = Base64.decode(b64, Base64.DEFAULT);
+            return saveBytes(bytes, name, lat, lon, quiet);
+        } catch (Exception e) {
+            toast("Gagal simpan: " + e.getMessage());
+            return "";
+        }
+    }
+
+    /** Inti simpan: terima JPEG bytes MENTAH (tanpa base64) -> tulis + EXIF + MediaStore. */
+    String saveBytes(byte[] bytes, String name, String lat, String lon, boolean quiet) {
+        try {
             String sub = "SnapName/" + today();
 
             boolean hasGeo = lat != null && !lat.isEmpty() && lon != null && !lon.isEmpty();
@@ -202,6 +212,115 @@ public class SaverBridge {
             toast("Ga bisa buka Maps: " + e.getMessage());
         }
     }
+
+    /* ================= SAVE PORT (localhost) =================
+     * Jalur simpan TERCEPAT: JS kirim JPEG bytes MENTAH via HTTP POST ke
+     * 127.0.0.1 -> zero base64, zero blok di JS thread, tulis file full di
+     * thread server. Ini yang bikin save serasa instan (kaya kamera WA).
+     * Amanin: bind loopback saja + token acak per sesi. */
+    private java.net.ServerSocket srv;
+    private int port = 0;
+    private String token = "";
+    private final java.util.concurrent.ExecutorService pool =
+            java.util.concurrent.Executors.newFixedThreadPool(2);
+
+    void startPort() {
+        try {
+            srv = new java.net.ServerSocket(0, 8, java.net.InetAddress.getByName("127.0.0.1"));
+            port = srv.getLocalPort();
+            token = java.util.UUID.randomUUID().toString().replace("-", "");
+            Thread t = new Thread(new Runnable() { @Override public void run() { acceptLoop(); } });
+            t.setDaemon(true);
+            t.start();
+        } catch (Exception e) { port = 0; }
+    }
+
+    void stopPort() {
+        try { if (srv != null) srv.close(); } catch (Exception ignored) {}
+        pool.shutdownNow();
+    }
+
+    private void acceptLoop() {
+        while (true) {
+            try {
+                final java.net.Socket s = srv.accept();
+                pool.execute(new Runnable() { @Override public void run() { handle(s); } });
+            } catch (Exception e) { break; }
+        }
+    }
+
+    private void handle(java.net.Socket s) {
+        try {
+            s.setSoTimeout(15000);
+            java.io.InputStream in = s.getInputStream();
+            java.io.OutputStream out = s.getOutputStream();
+            // baca request line + headers (sampai \r\n\r\n)
+            java.io.ByteArrayOutputStream hb = new java.io.ByteArrayOutputStream();
+            int state = 0, b;
+            while ((b = in.read()) != -1) {
+                hb.write(b);
+                if (b == '\r' && (state == 0 || state == 2)) state++;
+                else if (b == '\n' && (state == 1 || state == 3)) state++;
+                else state = 0;
+                if (state == 4) break;
+            }
+            String head = hb.toString("UTF-8");
+            String[] lines = head.split("\r\n");
+            String req = lines.length > 0 ? lines[0] : "";
+            int clen = 0;
+            for (String l : lines) {
+                if (l.toLowerCase(Locale.US).startsWith("content-length:")) {
+                    try { clen = Integer.parseInt(l.substring(15).trim()); } catch (Exception ignored) {}
+                }
+            }
+            if (req.startsWith("OPTIONS")) { respond(out, 204, "", null); s.close(); return; }
+            String path = req.split(" ").length > 1 ? req.split(" ")[1] : "";
+            java.util.HashMap<String, String> q = new java.util.HashMap<>();
+            int qi = path.indexOf('?');
+            if (qi >= 0) {
+                for (String kv : path.substring(qi + 1).split("&")) {
+                    int eq = kv.indexOf('=');
+                    if (eq > 0) q.put(kv.substring(0, eq),
+                            java.net.URLDecoder.decode(kv.substring(eq + 1), "UTF-8"));
+                }
+            }
+            if (!req.startsWith("POST") || !path.startsWith("/save") || !token.equals(q.get("tk")) || clen <= 0) {
+                respond(out, 403, "{}", "application/json"); s.close(); return;
+            }
+            byte[] body = new byte[clen];
+            int off = 0;
+            while (off < clen) {
+                int r = in.read(body, off, clen - off);
+                if (r < 0) break;
+                off += r;
+            }
+            String uri = saveBytes(body, q.get("name"), q.get("la"), q.get("lo"), true);
+            if (uri == null) uri = "";
+            String json = "{\"uri\":\"" + uri.replace("\\", "\\\\").replace("\"", "\\\"") + "\"}";
+            respond(out, 200, json, "application/json");
+            s.close();
+        } catch (Exception e) {
+            try { s.close(); } catch (Exception ignored) {}
+        }
+    }
+
+    private void respond(java.io.OutputStream out, int code, String body, String type) throws Exception {
+        byte[] bb = body.getBytes("UTF-8");
+        String h = "HTTP/1.1 " + code + " OK\r\n"
+                + "Access-Control-Allow-Origin: *\r\n"
+                + "Access-Control-Allow-Methods: POST, OPTIONS\r\n"
+                + "Access-Control-Allow-Headers: content-type\r\n"
+                + (type != null ? "Content-Type: " + type + "\r\n" : "")
+                + "Content-Length: " + bb.length + "\r\n"
+                + "Connection: close\r\n\r\n";
+        out.write(h.getBytes("UTF-8"));
+        out.write(bb);
+        out.flush();
+    }
+
+    /** JS ambil "port|token" buat jalur save cepat; "" kalau server gagal start. */
+    @JavascriptInterface
+    public String getSavePort() { return port > 0 ? (port + "|" + token) : ""; }
 
     private void toast(final String msg) {
         if (ctx instanceof Activity) {

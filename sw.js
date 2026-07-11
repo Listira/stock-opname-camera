@@ -7,5 +7,7 @@ self.addEventListener('activate',e=>{
   e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));
 });
 self.addEventListener('fetch',e=>{
+  // jangan ikut campur request non-GET (mis. POST foto ke save port lokal)
+  if(e.request.method!=='GET') return;
   e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request)));
 });

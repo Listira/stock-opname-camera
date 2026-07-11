@@ -328,7 +328,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v3.13</div>
+    <div id="startCredit">By Jova/Listira<br>v4.0</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -369,6 +369,15 @@ const CAM_RES = {
 let camRes = localStorage.getItem('so_res') || '2k';
 let blobReady=false;       // true kalau blob foto SAAT INI sudah jadi
 let pendingSave=false;     // user pencet Simpan sebelum blob jadi -> antri, auto-save pas siap
+let lastPvCanvas=null;     // kanvas preview kecil foto terakhir -> sumber thumbnail galeri
+// Jalur save TERCEPAT: kirim JPEG bytes mentah ke server lokal di dalam APK (tanpa base64)
+let savePort=null;
+try{
+  if(window.AndroidSaver && window.AndroidSaver.getSavePort){
+    const sp=window.AndroidSaver.getSavePort();
+    if(sp){ const i=sp.indexOf('|'); savePort={ p:sp.slice(0,i), t:sp.slice(i+1) }; }
+  }
+}catch(e){}
 let lastName = localStorage.getItem('so_lastname') || '';
 // Chip cepat (1-tap) — bisa diatur sendiri di Pengaturan. Default: kondisi aset.
 let quickChips = (()=>{ try{ return JSON.parse(localStorage.getItem('so_chips')||'null'); }catch(e){ return null; } })() || ['Baik','Rusak','Hilang'];
@@ -850,11 +859,12 @@ async function idbCount(){ const d=await idb(); return new Promise((res,rej)=>{ 
 async function idbLast(){ const d=await idb(); return new Promise((res,rej)=>{ const q=d.transaction('photos','readonly').objectStore('photos').openCursor(null,'prev'); q.onsuccess=()=>res(q.result?q.result.value:null); q.onerror=()=>rej(q.error); }); }
 async function idbTrim(n){ const d=await idb(); return new Promise((res,rej)=>{ const t=d.transaction('photos','readwrite'); const c=t.objectStore('photos').openCursor(); let left=n; c.onsuccess=()=>{ const cur=c.result; if(cur && left>0){ cur.delete(); left--; cur.continue(); } }; t.oncomplete=res; t.onerror=()=>rej(t.error); }); }
 
-async function pushGallery(name, uri){
+async function pushGallery(name, uri, fullBlob, thumbSrc){
   try{
     // pakai blob yang SUDAH ter-encode dari capture — jangan encode ulang full-res (lambat)
-    const full = lastBlob || await canvasToBlob(shot, 0, 0.9);
-    const thumb=await canvasToBlob(shot, 400, 0.6);  // kecil -> grid & thumbnail
+    const full = fullBlob || lastBlob || await canvasToBlob(shot, 0, 0.9);
+    // thumbnail dari kanvas preview kecil (bukan full-res) — save di background aman dari race
+    const thumb=await canvasToBlob(thumbSrc||shot, 400, 0.6);
     const rec={ id: Date.now()+'_'+Math.random().toString(36).slice(2,7),
       name, time:Date.now(), uri:uri||'', full, thumb };
     await idbAdd(rec);
@@ -990,6 +1000,7 @@ $('#shutter').onclick = ()=>{
   const pw=Math.min(480,w); pv.width=pw; pv.height=Math.max(1,Math.round(h*pw/w));
   pv.getContext('2d').drawImage(shot,0,0,pv.width,pv.height);
   preview.style.backgroundImage=`url(${pv.toDataURL('image/jpeg',0.7)})`;
+  lastPvCanvas=pv;   // sumber thumbnail galeri (murah, ga sentuh full-res)
   // Buka sheet + focus SEKARANG (masih dalam gesture tap) -> keyboard HP naik sendiri.
   blobReady=false;                 // foto saat ini belum jadi
   pendingSave=false;               // buang antrian save dari foto sebelumnya
@@ -1000,7 +1011,7 @@ $('#shutter').onclick = ()=>{
     lastBlob=b; lastBlobUrl=URL.createObjectURL(b);
     blobReady=true;                // siap disimpan
     if(pendingSave){ pendingSave=false; $('#saveBtn').click(); }  // save yang tadi diantri
-  },'image/jpeg',0.92);
+  },'image/jpeg',0.85);  // 0.85: encode+tulis lebih cepat, ~30% lebih kecil, visual setara
 };
 
 /* ---------- name sheet ---------- */
@@ -1059,26 +1070,53 @@ $('#saveBtn').onclick = ()=>{
   }
   usedNames.add(finalName.toLowerCase());
   lastName=finalName; localStorage.setItem('so_lastname',finalName);
-  // Di dalam APK (WebView) blob download ga jalan -> lewat jembatan native ke Pictures/SnapName.
-  // Di browser biasa -> tetap pakai <a download> ke folder Download.
-  let savedUri='';
+  const myBlob=lastBlob, myPv=lastPvCanvas, myTags=sheetTags.join('|');  // kunci data foto INI
+  // ===== INSTAN (kaya kamera WA): sheet nutup SEKARANG, user langsung bisa jepret lagi.
+  // Nulis file jalan di belakang; kalau (jarang) gagal -> rollback + toast peringatan.
+  count++; countEl.textContent=count;
+  localStorage.setItem('so_count', count); localStorage.setItem('so_count_date', todayStr());
+  closeSheet();
+  showToast((dup?'⚠ nama dobel → ':'✓ ')+finalName+'.jpg');
+  const done=(savedUri)=>{
+    logPhoto(finalName+'.jpg', myTags);
+    pushGallery(finalName+'.jpg', savedUri, myBlob, myPv);
+    if(count % 5 === 0) checkResources();   // pantau storage berkala
+  };
+  const fail=(msg)=>{
+    usedNames.delete(finalName.toLowerCase());   // rollback: nama ga hangus kalau gagal
+    count--; countEl.textContent=count; localStorage.setItem('so_count', count);
+    showToast('⚠ GAGAL simpan '+finalName+'.jpg: '+msg);
+  };
   if(window.AndroidSaver && window.AndroidSaver.savePhoto){
     const la = (exifOn && shotPos) ? String(shotPos.coords.latitude)  : '';
     const lo = (exifOn && shotPos) ? String(shotPos.coords.longitude) : '';
-    try{ savedUri = window.AndroidSaver.savePhoto(shot.toDataURL('image/jpeg',0.92), finalName+'.jpg', la, lo) || ''; }
-    catch(e){ showToast('Gagal simpan: '+e.message); return; }
+    if(savePort){
+      // JALUR TERCEPAT: JPEG bytes MENTAH via port lokal — zero base64, zero blok JS.
+      // Blob dibungkus tanpa type biar request tetap "simple" (ga kena preflight CORS).
+      fetch('http://127.0.0.1:'+savePort.p+'/save?tk='+savePort.t
+            +'&name='+encodeURIComponent(finalName+'.jpg')+'&la='+la+'&lo='+lo,
+            {method:'POST', body:new Blob([myBlob])})
+        .then(r=>r.json())
+        .then(j=>{ if(j && j.uri!==undefined) done(j.uri); else fail('respon server lokal aneh'); })
+        .catch(e=>fail(e.message));
+    } else {
+      // FALLBACK (HP tanpa save port): cara lama base64 — kasih 1 frame biar sheet nutup dulu
+      setTimeout(()=>{
+        const fr=new FileReader();
+        fr.onload=()=>{
+          try{ done(window.AndroidSaver.savePhoto(fr.result, finalName+'.jpg', la, lo) || ''); }
+          catch(e){ fail(e.message); }
+        };
+        fr.onerror=()=>fail('gagal baca foto');
+        fr.readAsDataURL(myBlob);
+      }, 50);
+    }
   } else {
     const a=document.createElement('a');
     a.href=lastBlobUrl; a.download=finalName+'.jpg';
     document.body.appendChild(a); a.click(); a.remove();
+    done('');
   }
-  count++; countEl.textContent=count;
-  localStorage.setItem('so_count', count); localStorage.setItem('so_count_date', todayStr());
-  logPhoto(finalName+'.jpg', sheetTags.join('|'));
-  pushGallery(finalName+'.jpg', savedUri);
-  if(count % 5 === 0) checkResources();   // pantau storage berkala
-  closeSheet();
-  showToast((dup?'⚠ nama dobel → ':'✓ ')+finalName+'.jpg');
 };
 
 // Enter di keyboard = simpan

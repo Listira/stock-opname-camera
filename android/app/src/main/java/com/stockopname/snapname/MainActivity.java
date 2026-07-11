@@ -25,6 +25,7 @@ import java.util.List;
 public class MainActivity extends Activity {
 
     private WebView web;
+    private SaverBridge bridge;
     private PermissionRequest pendingReq;
     private ValueCallback<Uri[]> filePathCallback;   // buat <input type=file> (pilih logo)
     private static final int REQ_PERMS = 1001;
@@ -48,10 +49,13 @@ public class MainActivity extends Activity {
         ws.setMediaPlaybackRequiresUserGesture(false);
         ws.setAllowFileAccess(false);
         ws.setAllowContentAccess(false);
+        // izinkan https (appassets) manggil http://127.0.0.1 (save port) — tetap lokal, aman
+        ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
 
         // Native bridge for saving photos (WebView can't download blob: URLs).
-        SaverBridge bridge = new SaverBridge(this);
+        bridge = new SaverBridge(this);
         bridge.setWebView(web);   // buat callback hasil save async balik ke JS
+        bridge.startPort();       // jalur save cepat: JPEG bytes mentah via localhost
         web.addJavascriptInterface(bridge, "AndroidSaver");
 
         web.setWebViewClient(new WebViewClient() {
@@ -186,6 +190,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (bridge != null) bridge.stopPort();
         if (web != null) web.destroy();
         super.onDestroy();
     }
