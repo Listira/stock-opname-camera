@@ -35,6 +35,9 @@
   .pill b{color:var(--ok)}
   .pill.warn{display:none;background:#e0524bd9;border-color:#ff8a8a}
   .pill.warn.show{display:flex}
+  /* indikator "lagi nyimpen di belakang" — jangan tutup app selama ini nyala */
+  #savePendPill{display:none;background:#3b82f6d9;border-color:#7ab3ff}
+  #savePendPill.show{display:flex}
   .iconbtn{width:42px;height:42px;border-radius:50%;background:#0009;border:1px solid #ffffff22;
     color:#fff;font-size:19px;display:flex;align-items:center;justify-content:center}
   .iconbtn:active{transform:scale(.92)}
@@ -161,6 +164,12 @@
   /* kotak 1:1 pakai trik padding-bottom (aspect-ratio ga didukung sebagian WebView -> sel numpuk) */
   .galCell{position:relative;height:0;padding-bottom:100%;border-radius:8px;overflow:hidden;background:#1b2233}
   .galCell img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  /* mode pilih (multi-delete) */
+  .galCell .ck{position:absolute;top:6px;right:6px;width:22px;height:22px;border-radius:50%;z-index:2;
+    background:#0008;border:2px solid #fff;display:none;align-items:center;justify-content:center;font-size:13px;color:#fff}
+  #galGrid.selmode .ck{display:flex}
+  .galCell.sel .ck{background:var(--accent);border-color:var(--accent)}
+  .galCell.sel img{opacity:.55}
   .galCell span{position:absolute;left:0;right:0;bottom:0;font-size:10px;color:#fff;
     background:linear-gradient(transparent,#000c);padding:8px 5px 3px;white-space:nowrap;
     overflow:hidden;text-overflow:ellipsis}
@@ -200,6 +209,7 @@
     <div id="topbar">
       <div style="display:flex;gap:8px;align-items:center">
         <div class="pill">📸 Sesi: <b id="count">0</b><span id="limit"></span></div>
+        <div id="savePendPill" class="pill" title="Foto lagi disimpan di belakang">💾 <b id="savePendN">0</b></div>
         <div id="warnPill" class="pill warn"></div>
       </div>
       <div style="display:flex;gap:10px">
@@ -241,7 +251,7 @@
     <div class="galBar">
       <button id="galClose">✕</button>
       <b id="galTitle">Foto sesi ini</b>
-      <span style="width:44px"></span>
+      <button id="galSel" style="width:auto;font-size:14px;padding:0 12px">Pilih</button>
     </div>
     <div id="galGrid"></div>
   </div>
@@ -328,7 +338,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v4.0</div>
+    <div id="startCredit">By Jova/Listira<br>v4.01</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -861,10 +871,12 @@ async function idbTrim(n){ const d=await idb(); return new Promise((res,rej)=>{ 
 
 async function pushGallery(name, uri, fullBlob, thumbSrc){
   try{
-    // pakai blob yang SUDAH ter-encode dari capture — jangan encode ulang full-res (lambat)
-    const full = fullBlob || lastBlob || await canvasToBlob(shot, 0, 0.9);
     // thumbnail dari kanvas preview kecil (bukan full-res) — save di background aman dari race
     const thumb=await canvasToBlob(thumbSrc||shot, 400, 0.6);
+    // HEMAT DISK: kalau foto udah tersimpan di Pictures (ada uri) + ada save port,
+    // JANGAN tulis full-res kedua kalinya ke database app — viewer ambil dari file asli.
+    const full = (savePort && uri) ? null
+               : (fullBlob || lastBlob || await canvasToBlob(shot, 0, 0.9));
     const rec={ id: Date.now()+'_'+Math.random().toString(36).slice(2,7),
       name, time:Date.now(), uri:uri||'', full, thumb };
     await idbAdd(rec);
@@ -905,14 +917,63 @@ function renderGrid(){
     const cell=document.createElement('div'); cell.className='galCell';
     const im=document.createElement('img'); im.src=url; im.loading='lazy';
     const sp=document.createElement('span'); sp.textContent=g.name;
-    cell.appendChild(im); cell.appendChild(sp);
-    cell.onclick=()=>openLightbox(idx);
+    const ck=document.createElement('div'); ck.className='ck'; ck.textContent='✓';
+    cell.appendChild(im); cell.appendChild(sp); cell.appendChild(ck);
+    cell.onclick=()=>{
+      if(selMode){
+        if(selIds.has(g.id)) selIds.delete(g.id); else selIds.add(g.id);
+        cell.classList.toggle('sel', selIds.has(g.id));
+        updateSelUI();
+      } else openLightbox(idx);
+    };
     galGrid.appendChild(cell);
   });
+  updateSelUI();
 }
+
+// ---- mode pilih (multi-delete) ----
+let selMode=false, selIds=new Set();
+function updateSelUI(){
+  galGrid.classList.toggle('selmode', selMode);
+  const b=$('#galSel');
+  if(!selMode){ b.textContent='Pilih'; galTitle.textContent='Foto sesi ini ('+galRecs.length+')'; }
+  else { b.textContent = selIds.size ? ('🗑 Hapus '+selIds.size) : 'Batal';
+         galTitle.textContent='Pilih foto'; }
+}
+$('#galSel').onclick=async ()=>{
+  if(!selMode){ selMode=true; selIds.clear(); updateSelUI(); return; }
+  if(!selIds.size){ selMode=false; updateSelUI(); return; }
+  if(!(await customConfirm('Hapus '+selIds.size+' foto? Hilang dari Galeri HP juga.'))) return;
+  for(const r of galRecs){
+    if(!selIds.has(r.id)) continue;
+    try{ if(window.AndroidSaver && window.AndroidSaver.deletePhoto) window.AndroidSaver.deletePhoto(r.uri||''); }catch(e){}
+    try{ await idbDel(r.id); }catch(e){}
+  }
+  galRecs=galRecs.filter(g=>!selIds.has(g.id));
+  selMode=false; selIds.clear();
+  refreshThumbBtn(); renderGrid();
+  showToast('Foto dihapus');
+};
+
 async function openGallery(){
   let all=[]; try{ all=await idbAll(); }catch(e){}
+  // SINKRON sama Galeri HP: foto yang udah dihapus di luar app -> buang dari sini juga
+  try{
+    if(window.AndroidSaver && window.AndroidSaver.missingUris){
+      const us=all.map(r=>r.uri||'').filter(Boolean);
+      if(us.length){
+        const miss=(window.AndroidSaver.missingUris(us.join('|'))||'').split('|').filter(Boolean);
+        if(miss.length){
+          const gone=new Set(miss);
+          for(const r of all){ if(gone.has(r.uri)){ try{ await idbDel(r.id); }catch(e){} } }
+          all=all.filter(r=>!gone.has(r.uri));
+          refreshThumbBtn();
+        }
+      }
+    }
+  }catch(e){}
   galRecs=all.slice().reverse();   // terbaru dulu
+  selMode=false; selIds.clear();
   renderGrid();
   galModal.classList.add('open');
   pushModal(closeGallery);
@@ -925,9 +986,18 @@ function showView(i){
   if(!galRecs.length) return;
   viewIdx=(i+galRecs.length)%galRecs.length;
   const g=galRecs[viewIdx];
-  if(viewUrl) URL.revokeObjectURL(viewUrl);
-  viewUrl=URL.createObjectURL(g.full);
-  galImg.src=viewUrl; galName.textContent=g.name;
+  if(viewUrl){ URL.revokeObjectURL(viewUrl); viewUrl=null; }
+  if(g.full){
+    viewUrl=URL.createObjectURL(g.full);
+    galImg.src=viewUrl;
+  } else if(savePort && g.uri){
+    // full-res di-stream dari file asli di Pictures via port lokal (ga dobel simpan)
+    galImg.src='http://127.0.0.1:'+savePort.p+'/photo?tk='+savePort.t+'&uri='+encodeURIComponent(g.uri);
+  } else {
+    viewUrl=URL.createObjectURL(g.thumb);  // fallback terakhir: thumbnail
+    galImg.src=viewUrl;
+  }
+  galName.textContent=g.name;
   galPos.innerHTML=(viewIdx+1)+' / '+galRecs.length+' <span class="galHint">geser ←→</span>';
 }
 function openLightbox(idx){ showView(idx); galView.classList.add('open'); pushModal(closeLightbox); }
@@ -1090,27 +1160,13 @@ $('#saveBtn').onclick = ()=>{
   if(window.AndroidSaver && window.AndroidSaver.savePhoto){
     const la = (exifOn && shotPos) ? String(shotPos.coords.latitude)  : '';
     const lo = (exifOn && shotPos) ? String(shotPos.coords.longitude) : '';
-    if(savePort){
-      // JALUR TERCEPAT: JPEG bytes MENTAH via port lokal — zero base64, zero blok JS.
-      // Blob dibungkus tanpa type biar request tetap "simple" (ga kena preflight CORS).
-      fetch('http://127.0.0.1:'+savePort.p+'/save?tk='+savePort.t
-            +'&name='+encodeURIComponent(finalName+'.jpg')+'&la='+la+'&lo='+lo,
-            {method:'POST', body:new Blob([myBlob])})
-        .then(r=>r.json())
-        .then(j=>{ if(j && j.uri!==undefined) done(j.uri); else fail('respon server lokal aneh'); })
-        .catch(e=>fail(e.message));
-    } else {
-      // FALLBACK (HP tanpa save port): cara lama base64 — kasih 1 frame biar sheet nutup dulu
-      setTimeout(()=>{
-        const fr=new FileReader();
-        fr.onload=()=>{
-          try{ done(window.AndroidSaver.savePhoto(fr.result, finalName+'.jpg', la, lo) || ''); }
-          catch(e){ fail(e.message); }
-        };
-        fr.onerror=()=>fail('gagal baca foto');
-        fr.readAsDataURL(myBlob);
-      }, 50);
-    }
+    // ANTRIAN SERIAL di background: jepret sekenceng apapun, tulisan file jalan
+    // satu-satu (disk HP ga keteteran), badge 💾 nyala selama masih ada antrian.
+    pendingWrites++; setPendingBadge();
+    ioQueue = ioQueue
+      .then(()=>writePhoto(myBlob, finalName+'.jpg', la, lo))
+      .then(uri=>done(uri), e=>fail((e && e.message) || 'error'))
+      .then(()=>{ pendingWrites--; setPendingBadge(); });
   } else {
     const a=document.createElement('a');
     a.href=lastBlobUrl; a.download=finalName+'.jpg';
@@ -1118,6 +1174,37 @@ $('#saveBtn').onclick = ()=>{
     done('');
   }
 };
+
+// Tulis 1 foto ke storage HP — pilih jalur tercepat yang tersedia
+function writePhoto(blob, fname, la, lo){
+  return new Promise((res,rej)=>{
+    if(savePort){
+      // JPEG bytes MENTAH via port lokal — zero base64, zero blok JS.
+      // Blob dibungkus tanpa type biar request tetap "simple" (ga kena preflight CORS).
+      fetch('http://127.0.0.1:'+savePort.p+'/save?tk='+savePort.t
+            +'&name='+encodeURIComponent(fname)+'&la='+la+'&lo='+lo,
+            {method:'POST', body:new Blob([blob])})
+        .then(r=>r.json())
+        .then(j=>{ if(j && j.uri!==undefined) res(j.uri); else rej(new Error('respon server lokal aneh')); })
+        .catch(rej);
+    } else {
+      // FALLBACK (HP tanpa save port): cara lama base64
+      const fr=new FileReader();
+      fr.onload=()=>{
+        try{ res(window.AndroidSaver.savePhoto(fr.result, fname, la, lo) || ''); }
+        catch(e){ rej(e); }
+      };
+      fr.onerror=()=>rej(new Error('gagal baca foto'));
+      fr.readAsDataURL(blob);
+    }
+  });
+}
+// Badge 💾: masih nyala = JANGAN tutup app dulu (foto lagi ditulis di belakang)
+let ioQueue=Promise.resolve(), pendingWrites=0;
+function setPendingBadge(){
+  $('#savePendN').textContent=pendingWrites;
+  $('#savePendPill').classList.toggle('show', pendingWrites>0);
+}
 
 // Enter di keyboard = simpan
 nameInput.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); $('#saveBtn').click(); }});

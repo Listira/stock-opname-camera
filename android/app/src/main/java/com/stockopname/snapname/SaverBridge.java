@@ -284,6 +284,18 @@ public class SaverBridge {
                             java.net.URLDecoder.decode(kv.substring(eq + 1), "UTF-8"));
                 }
             }
+            // GET /photo?tk&uri -> stream foto asli dari Pictures (buat viewer galeri, tanpa dobel simpan)
+            if (req.startsWith("GET") && path.startsWith("/photo") && token.equals(q.get("tk"))) {
+                byte[] img = readUri(q.get("uri"));
+                if (img == null) { respond(out, 404, "{}", "application/json"); }
+                else {
+                    String h = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\n"
+                            + "Content-Type: image/jpeg\r\nContent-Length: " + img.length
+                            + "\r\nConnection: close\r\n\r\n";
+                    out.write(h.getBytes("UTF-8")); out.write(img); out.flush();
+                }
+                s.close(); return;
+            }
             if (!req.startsWith("POST") || !path.startsWith("/save") || !token.equals(q.get("tk")) || clen <= 0) {
                 respond(out, 403, "{}", "application/json"); s.close(); return;
             }
@@ -321,6 +333,42 @@ public class SaverBridge {
     /** JS ambil "port|token" buat jalur save cepat; "" kalau server gagal start. */
     @JavascriptInterface
     public String getSavePort() { return port > 0 ? (port + "|" + token) : ""; }
+
+    private byte[] readUri(String u) {
+        try {
+            if (u == null || u.isEmpty()) return null;
+            java.io.InputStream in = u.startsWith("content")
+                    ? ctx.getContentResolver().openInputStream(Uri.parse(u))
+                    : new java.io.FileInputStream(new File(u));
+            if (in == null) return null;
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+            in.close();
+            return bo.toByteArray();
+        } catch (Exception e) { return null; }
+    }
+
+    /** Cek uri mana yang fotonya UDAH DIHAPUS dari Galeri HP (sinkron galeri in-app).
+     *  Input & output: uri dipisah '|'. */
+    @JavascriptInterface
+    public String missingUris(String joined) {
+        StringBuilder sb = new StringBuilder();
+        if (joined == null) return "";
+        for (String u : joined.split("\\|")) {
+            if (u.isEmpty()) continue;
+            boolean ok = false;
+            try {
+                if (u.startsWith("content")) {
+                    ParcelFileDescriptor p = ctx.getContentResolver().openFileDescriptor(Uri.parse(u), "r");
+                    if (p != null) { p.close(); ok = true; }
+                } else ok = new File(u).exists();
+            } catch (Exception e) { ok = false; }
+            if (!ok) { if (sb.length() > 0) sb.append('|'); sb.append(u); }
+        }
+        return sb.toString();
+    }
 
     private void toast(final String msg) {
         if (ctx instanceof Activity) {
