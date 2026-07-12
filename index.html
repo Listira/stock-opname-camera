@@ -338,7 +338,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v4.01</div>
+    <div id="startCredit">By Jova/Listira<br>v4.02</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -845,8 +845,13 @@ let _db=null;
 function idb(){
   if(_db) return Promise.resolve(_db);
   return new Promise((res,rej)=>{
-    const r=indexedDB.open('snapname',1);
-    r.onupgradeneeded=e=>{ const d=e.target.result; if(!d.objectStoreNames.contains('photos')) d.createObjectStore('photos',{keyPath:'id'}); };
+    const r=indexedDB.open('snapname',2);
+    r.onupgradeneeded=e=>{ const d=e.target.result;
+      if(!d.objectStoreNames.contains('photos')) d.createObjectStore('photos',{keyPath:'id'});
+      // OUTBOX: jaring pengaman — foto dicatat DULU sebelum ditulis ke storage;
+      // app kebunuh/HP ke-lock di tengah jalan -> dilanjutin otomatis pas dibuka lagi
+      if(!d.objectStoreNames.contains('outbox')) d.createObjectStore('outbox',{keyPath:'id'});
+    };
     r.onsuccess=e=>{ _db=e.target.result; res(_db); };
     r.onerror=()=>rej(r.error);
   });
@@ -867,6 +872,11 @@ function canvasToBlob(canvas, maxW, q){
 // Helper RINGAN buat jalur save — jangan getAll() (ngangkat semua foto full-res) tiap save
 async function idbCount(){ const d=await idb(); return new Promise((res,rej)=>{ const q=d.transaction('photos','readonly').objectStore('photos').count(); q.onsuccess=()=>res(q.result||0); q.onerror=()=>rej(q.error); }); }
 async function idbLast(){ const d=await idb(); return new Promise((res,rej)=>{ const q=d.transaction('photos','readonly').objectStore('photos').openCursor(null,'prev'); q.onsuccess=()=>res(q.result?q.result.value:null); q.onerror=()=>rej(q.error); }); }
+// --- outbox (foto pending yang belum kelar ditulis) ---
+async function obPut(rec){ const d=await idb(); return new Promise((res,rej)=>{ const t=d.transaction('outbox','readwrite'); t.objectStore('outbox').put(rec); t.oncomplete=res; t.onerror=()=>rej(t.error); }); }
+async function obGet(id){ const d=await idb(); return new Promise((res,rej)=>{ const q=d.transaction('outbox','readonly').objectStore('outbox').get(id); q.onsuccess=()=>res(q.result||null); q.onerror=()=>rej(q.error); }); }
+async function obDel(id){ const d=await idb(); return new Promise((res,rej)=>{ const t=d.transaction('outbox','readwrite'); t.objectStore('outbox').delete(id); t.oncomplete=res; t.onerror=()=>rej(t.error); }); }
+async function obAll(){ const d=await idb(); return new Promise((res,rej)=>{ const q=d.transaction('outbox','readonly').objectStore('outbox').getAll(); q.onsuccess=()=>res(q.result||[]); q.onerror=()=>rej(q.error); }); }
 async function idbTrim(n){ const d=await idb(); return new Promise((res,rej)=>{ const t=d.transaction('photos','readwrite'); const c=t.objectStore('photos').openCursor(); let left=n; c.onsuccess=()=>{ const cur=c.result; if(cur && left>0){ cur.delete(); left--; cur.continue(); } }; t.oncomplete=res; t.onerror=()=>rej(t.error); }); }
 
 async function pushGallery(name, uri, fullBlob, thumbSrc){
@@ -1152,20 +1162,23 @@ $('#saveBtn').onclick = ()=>{
     pushGallery(finalName+'.jpg', savedUri, myBlob, myPv);
     if(count % 5 === 0) checkResources();   // pantau storage berkala
   };
-  const fail=(msg)=>{
-    usedNames.delete(finalName.toLowerCase());   // rollback: nama ga hangus kalau gagal
-    count--; countEl.textContent=count; localStorage.setItem('so_count', count);
-    showToast('⚠ GAGAL simpan '+finalName+'.jpg: '+msg);
-  };
   if(window.AndroidSaver && window.AndroidSaver.savePhoto){
     const la = (exifOn && shotPos) ? String(shotPos.coords.latitude)  : '';
     const lo = (exifOn && shotPos) ? String(shotPos.coords.longitude) : '';
     // ANTRIAN SERIAL di background: jepret sekenceng apapun, tulisan file jalan
     // satu-satu (disk HP ga keteteran), badge 💾 nyala selama masih ada antrian.
+    // OUTBOX dulu = jaring pengaman: app kebunuh/HP ke-lock sebelum kelar nulis
+    // -> foto TIDAK hilang, dilanjutin otomatis pas app dibuka lagi.
     pendingWrites++; setPendingBadge();
+    const obId='o'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+    obInFlight.add(obId);   // biar drainOutbox ga nyamber foto yang lagi diproses di sini
     ioQueue = ioQueue
+      .then(()=>obPut({id:obId, name:finalName+'.jpg', la, lo, tags:myTags, blob:myBlob}).catch(()=>{}))
       .then(()=>writePhoto(myBlob, finalName+'.jpg', la, lo))
-      .then(uri=>done(uri), e=>fail((e && e.message) || 'error'))
+      .then(uri=>{ obInFlight.delete(obId); obDel(obId).catch(()=>{}); done(uri); },
+            ()=>{ // gagal (storage penuh dll) -> TETAP di outbox, dicoba lagi otomatis
+                  obInFlight.delete(obId);
+                  showToast('⚠ '+finalName+'.jpg belum kesimpen — dicoba lagi otomatis'); })
       .then(()=>{ pendingWrites--; setPendingBadge(); });
   } else {
     const a=document.createElement('a');
@@ -1205,6 +1218,37 @@ function setPendingBadge(){
   $('#savePendN').textContent=pendingWrites;
   $('#savePendPill').classList.toggle('show', pendingWrites>0);
 }
+
+// DRAIN OUTBOX: lanjutin foto yang belum kelar disimpen (app sempat kebunuh/ke-lock).
+// Dipanggil saat app dibuka & tiap balik ke foreground. Jalan lewat ANTRIAN YANG SAMA
+// dengan save biasa (serial) + skip entri yang lagi in-flight -> ga mungkin dobel tulis.
+let obDraining=false;
+const obInFlight=new Set();
+async function drainOutbox(){
+  if(obDraining || !(window.AndroidSaver && window.AndroidSaver.savePhoto)) return;
+  obDraining=true;
+  try{
+    const items=(await obAll()).filter(it=>!obInFlight.has(it.id));
+    for(const it of items){
+      pendingWrites++; setPendingBadge();
+      ioQueue = ioQueue.then(async ()=>{
+        try{
+          if(obInFlight.has(it.id)) return;          // keburu diproses jalur save
+          if(!(await obGet(it.id))) return;          // keburu kelar & udah dicoret
+          await writePhoto(it.blob, it.name, it.la||'', it.lo||'');
+          await obDel(it.id);
+          logPhoto(it.name, it.tags||'');
+          showToast('💾 Foto tertunda tersimpan: '+it.name);
+        }catch(e){ /* masih gagal -> tetap di outbox, dicoba lagi lain waktu */ }
+        finally{ pendingWrites--; setPendingBadge(); }
+      });
+    }
+    await ioQueue;
+  }catch(e){}
+  obDraining=false;
+}
+setTimeout(drainOutbox, 1200);   // cek sisa outbox tiap app dibuka
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible') setTimeout(drainOutbox, 500); });
 
 // Enter di keyboard = simpan
 nameInput.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); $('#saveBtn').click(); }});
