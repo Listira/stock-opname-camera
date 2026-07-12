@@ -342,7 +342,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v4.03</div>
+    <div id="startCredit">By Jova/Listira<br>v4.04</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -372,8 +372,7 @@ const DEMO = isDemo();
 
 let stream=null, facing='environment', torchOn=false, track=null;
 let lastBlobUrl=null, lastBlob=null, count=0;
-let usedNames=new Set();   // anti-duplikat nama dalam 1 sesi
-let dupCount=new Map();    // hitungan terakhir per nama -> dedupe O(1)
+// (dedup nama internal dihapus — duplikat diurus Android/MediaStore: "Nama (2).jpg" dst)
 const CAM_RES = {
   '720p':  {width:1280,  height:720},
   '1080p': {width:1920,  height:1080},
@@ -1173,25 +1172,21 @@ $('#saveBtn').onclick = ()=>{
   // anti race: blob foto belum jadi -> ANTRIKAN save, jalan otomatis begitu siap.
   // (dulu ditolak + toast; sekarang user ngetik kilat pun tetap kesimpen)
   if(!blobReady || !lastBlobUrl){ pendingSave=true; return; }
-  // anti-duplikat O(1): mulai dari hitungan terakhir, Set tetap menjamin benar-benar unik
-  let key=name.toLowerCase(), finalName=name, dup=false;
-  if(usedNames.has(key)){
-    let n=(dupCount.get(key)||1)+1; finalName=name+'('+n+')';
-    while(usedNames.has(finalName.toLowerCase())){ n++; finalName=name+'('+n+')'; }
-    dupCount.set(key,n); dup=true;
-  }
-  usedNames.add(finalName.toLowerCase());
+  // Nama dobel? SERAHIN ke Android (MediaStore) -> otomatis "Nama (2).jpg", "(3)" dst,
+  // konsisten walau app ditutup-buka. (Dedup internal DIHAPUS — dulu dobel sistem
+  // bikin hasil aneh "Nama(2) (2).jpg".)
+  const finalName=name;
   lastName=finalName; localStorage.setItem('so_lastname',finalName);
   const myBlob=lastBlob, myPv=lastPvCanvas, myTags=sheetTags.join('|');  // kunci data foto INI
   // ===== INSTAN (kaya kamera WA): sheet nutup SEKARANG, user langsung bisa jepret lagi.
-  // Nulis file jalan di belakang; kalau (jarang) gagal -> rollback + toast peringatan.
   count++; countEl.textContent=count;
   localStorage.setItem('so_count', count); localStorage.setItem('so_count_date', todayStr());
   closeSheet();
-  showToast((dup?'⚠ nama dobel → ':'✓ ')+finalName+'.jpg');
-  const done=(savedUri)=>{
-    logPhoto(finalName+'.jpg', myTags);
-    pushGallery(finalName+'.jpg', savedUri, myBlob, myPv);
+  showToast('✓ '+finalName+'.jpg');
+  const done=(r)=>{
+    const nm=(r && r.name) || (finalName+'.jpg');   // nama FINAL dari Android (bisa "(2)")
+    logPhoto(nm, myTags);
+    pushGallery(nm, (r && r.uri) || '', myBlob, myPv);
     if(count % 5 === 0) checkResources();   // pantau storage berkala
   };
   if(window.AndroidSaver && window.AndroidSaver.savePhoto){
@@ -1207,7 +1202,7 @@ $('#saveBtn').onclick = ()=>{
     ioQueue = ioQueue
       .then(()=>obPut({id:obId, name:finalName+'.jpg', la, lo, tags:myTags, blob:myBlob}).catch(()=>{}))
       .then(()=>writePhoto(myBlob, finalName+'.jpg', la, lo))
-      .then(uri=>{ obInFlight.delete(obId); obDel(obId).catch(()=>{}); done(uri); },
+      .then(r=>{ obInFlight.delete(obId); obDel(obId).catch(()=>{}); done(r); },
             ()=>{ // gagal (storage penuh dll) -> TETAP di outbox, dicoba lagi otomatis
                   obInFlight.delete(obId);
                   showToast('⚠ '+finalName+'.jpg belum kesimpen — dicoba lagi otomatis'); })
@@ -1216,7 +1211,7 @@ $('#saveBtn').onclick = ()=>{
     const a=document.createElement('a');
     a.href=lastBlobUrl; a.download=finalName+'.jpg';
     document.body.appendChild(a); a.click(); a.remove();
-    done('');
+    done({uri:'', name:finalName+'.jpg'});
   }
 };
 
@@ -1230,13 +1225,14 @@ function writePhoto(blob, fname, la, lo){
             +'&name='+encodeURIComponent(fname)+'&la='+la+'&lo='+lo,
             {method:'POST', body:new Blob([blob])})
         .then(r=>r.json())
-        .then(j=>{ if(j && j.uri!==undefined) res(j.uri); else rej(new Error('respon server lokal aneh')); })
+        .then(j=>{ if(j && j.uri!==undefined) res({uri:j.uri, name:j.name||fname});
+                   else rej(new Error('respon server lokal aneh')); })
         .catch(rej);
     } else {
       // FALLBACK (HP tanpa save port): cara lama base64
       const fr=new FileReader();
       fr.onload=()=>{
-        try{ res(window.AndroidSaver.savePhoto(fr.result, fname, la, lo) || ''); }
+        try{ res({uri: window.AndroidSaver.savePhoto(fr.result, fname, la, lo) || '', name:fname}); }
         catch(e){ rej(e); }
       };
       fr.onerror=()=>rej(new Error('gagal baca foto'));
@@ -1267,10 +1263,10 @@ async function drainOutbox(){
         try{
           if(obInFlight.has(it.id)) return;          // keburu diproses jalur save
           if(!(await obGet(it.id))) return;          // keburu kelar & udah dicoret
-          await writePhoto(it.blob, it.name, it.la||'', it.lo||'');
+          const r=await writePhoto(it.blob, it.name, it.la||'', it.lo||'');
           await obDel(it.id);
-          logPhoto(it.name, it.tags||'');
-          showToast('💾 Foto tertunda tersimpan: '+it.name);
+          logPhoto((r && r.name)||it.name, it.tags||'');
+          showToast('💾 Foto tertunda tersimpan: '+((r && r.name)||it.name));
         }catch(e){ /* masih gagal -> tetap di outbox, dicoba lagi lain waktu */ }
         finally{ pendingWrites--; setPendingBadge(); }
       });

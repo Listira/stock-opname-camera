@@ -83,7 +83,7 @@ with sync_playwright() as p:
         check("heap growth bounded (<+20MB over 250 shots)", (h1-h0)/1e6 < 20, f"{(h1-h0)/1e6:+.1f}MB")
 
     # ============================================================
-    print("\n=== STRESS 3: DUPLICATE-NAME STORM x200 (same name) ===")
+    print("\n=== STRESS 3: DUPLICATE-NAME STORM x200 (dedup delegated to OS) ===")
     t0=time.time(); names=[]
     for i in range(200):
         page.click("#shutter"); page.wait_for_selector("#sheet.open",timeout=3000)
@@ -92,24 +92,9 @@ with sync_playwright() as p:
             page.click("#saveBtn")
         names.append(di.value.suggested_filename)
     dt=time.time()-t0
-    uniq=len(set(names))
-    check("all 200 dup-names unique on disk", uniq==200, f"{uniq} unique")
-    check("first=SAMA.jpg, then (2)..(200)", names[0]=="SAMA.jpg" and names[1]=="SAMA(2).jpg" and names[-1]=="SAMA(200).jpg", f"{names[0]},{names[1]},...,{names[-1]}")
-    # dedupe adds ~0: per-iteration should match the automation baseline, not blow up
-    check("dedupe adds no overhead (per-shot <= 1.5x baseline)", dt/200 <= s1_per*1.5, f"{dt/200*1000:.0f} vs {s1_per*1000:.0f} ms baseline")
-    # pure-JS microbench: 10k same-name dedupe with the SAME O(1) algo must be trivial
-    micro = page.evaluate("""()=>{
-        const used=new Set(), dup=new Map(), name='sama', key='sama';
-        const t=performance.now();
-        for(let i=0;i<10000;i++){
-          let fn=name;
-          if(used.has(key)){ let n=(dup.get(key)||1)+1; fn=name+'('+n+')';
-            while(used.has(fn.toLowerCase())){ n++; fn=name+'('+n+')'; } dup.set(key,n); }
-          used.add(fn.toLowerCase());
-        }
-        return performance.now()-t;
-    }""")
-    check("dedupe algo O(1): 10k dups < 200ms", micro < 200, f"{micro:.1f}ms for 10000")
+    check("all 200 dup-name saves dispatched", len(names)==200, f"{len(names)}")
+    check("names sent AS-IS (MediaStore/OS does ' (2)')", all(n=="SAMA.jpg" for n in names), f"{names[0]} ... {names[-1]}")
+    check("dup names add no overhead (per-shot <= 1.5x baseline)", dt/200 <= s1_per*1.5, f"{dt/200*1000:.0f} vs {s1_per*1000:.0f} ms baseline")
 
     # ============================================================
     print("\n=== STRESS 4: PATHOLOGICAL NAMES ===")

@@ -91,14 +91,14 @@ with sync_playwright() as p:
     check("prefill = last name AS-IS (no auto +1)", sug=="Aset-007", sug)
     page.click("#retakeBtn")
 
-    print("\n=== ANTI-DUPLICATE GUARD ===")
+    print("\n=== DUP NAMES: DELEGATED TO OS (MediaStore adds ' (2)') ===")
     shoot(page); page.fill("#nameInput","DUPL")
     with page.expect_download() as d1: page.click("#saveBtn")
     n1=d1.value.suggested_filename
     shoot(page); page.fill("#nameInput","DUPL")
     with page.expect_download() as d2: page.click("#saveBtn")
     n2=d2.value.suggested_filename
-    check("dup name auto-suffixed (2)", n1=="DUPL.jpg" and n2=="DUPL(2).jpg", f"{n1} / {n2}")
+    check("dup names sent AS-IS (no app-side suffix)", n1=="DUPL.jpg" and n2=="DUPL.jpg", f"{n1} / {n2}")
 
     print("\n=== CHIP APPEND ===")
     shoot(page)

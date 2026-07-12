@@ -125,6 +125,13 @@ public class SaverBridge {
                         Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), sub);
                 if (!dir.exists()) dir.mkdirs();
                 File f = new File(dir, name);
+                if (f.exists()) {   // Android lama: dedup manual "Nama (2).jpg" (jangan overwrite!)
+                    String base = name, ext = "";
+                    int dot = name.lastIndexOf('.');
+                    if (dot > 0) { base = name.substring(0, dot); ext = name.substring(dot); }
+                    int n = 2;
+                    while (f.exists()) { f = new File(dir, base + " (" + n + ")" + ext); n++; }
+                }
                 FileOutputStream fos = new FileOutputStream(f);
                 fos.write(bytes); fos.flush(); fos.close();
                 if (hasGeo) {
@@ -308,7 +315,10 @@ public class SaverBridge {
             }
             String uri = saveBytes(body, q.get("name"), q.get("la"), q.get("lo"), true);
             if (uri == null) uri = "";
-            String json = "{\"uri\":\"" + uri.replace("\\", "\\\\").replace("\"", "\\\"") + "\"}";
+            // nama FINAL beneran di disk (MediaStore bisa nambahin " (2)" kalau dobel)
+            String fname = displayNameOf(uri, q.get("name"));
+            String json = "{\"uri\":\"" + uri.replace("\\", "\\\\").replace("\"", "\\\"")
+                    + "\",\"name\":\"" + fname.replace("\\", "\\\\").replace("\"", "\\\"") + "\"}";
             respond(out, 200, json, "application/json");
             s.close();
         } catch (Exception e) {
@@ -333,6 +343,24 @@ public class SaverBridge {
     /** JS ambil "port|token" buat jalur save cepat; "" kalau server gagal start. */
     @JavascriptInterface
     public String getSavePort() { return port > 0 ? (port + "|" + token) : ""; }
+
+    /** Nama file FINAL di disk (MediaStore auto-rename dobel jadi "Nama (2).jpg"). */
+    private String displayNameOf(String uri, String fallback) {
+        try {
+            if (uri != null && uri.startsWith("content")) {
+                android.database.Cursor c = ctx.getContentResolver().query(Uri.parse(uri),
+                        new String[]{MediaStore.MediaColumns.DISPLAY_NAME}, null, null, null);
+                if (c != null) {
+                    String n = c.moveToFirst() ? c.getString(0) : null;
+                    c.close();
+                    if (n != null && !n.isEmpty()) return n;
+                }
+            } else if (uri != null && !uri.isEmpty()) {
+                return new File(uri).getName();
+            }
+        } catch (Exception ignored) {}
+        return fallback == null ? "" : fallback;
+    }
 
     private byte[] readUri(String u) {
         try {
