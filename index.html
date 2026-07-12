@@ -333,8 +333,18 @@
 
       <hr class="setDiv">
       <div class="setHead">📋 Log Foto</div>
-      <div class="setNote">Tiap foto kecatat (nama, waktu, koordinat, alamat). Ekspor ke Excel/CSV.</div>
+      <div class="setNote">Tiap foto kecatat (nama, waktu, koordinat, alamat). Ekspor ke Excel/CSV.
+        Log lebih tua dari 30 hari otomatis dibersihkan.</div>
       <button class="btn ghost" id="csvBtn" style="width:100%;margin-top:8px">Ekspor Log CSV</button>
+
+      <hr class="setDiv">
+      <div class="setHead">🧹 Penyimpanan</div>
+      <div class="setNote" id="storInfo">Menghitung…</div>
+      <div class="setNote" style="color:var(--ok)">Foto asli di Galeri HP (Pictures/SnapName) TIDAK ikut kehapus.</div>
+      <div class="wmBtns">
+        <button class="btn ghost" id="clrLog">Bersihkan Log</button>
+        <button class="btn ghost" id="clrGal">Bersihkan Galeri Sesi</button>
+      </div>
 
       <button class="btn save" id="wmClose" style="margin-top:14px">Selesai</button>
     </div>
@@ -342,7 +352,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v4.04</div>
+    <div id="startCredit">By Jova/Listira<br>v4.05</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -626,7 +636,35 @@ wmFile.addEventListener('change', e=>{
   e.target.value='';
 });
 wmOn.addEventListener('change', ()=>localStorage.setItem('so_wm_on', wmOn.checked?'1':'0'));
-$('#setBtn').onclick  = ()=>{ wmModal.classList.add('open'); pushModal(()=>wmModal.classList.remove('open')); };
+$('#setBtn').onclick  = ()=>{ wmModal.classList.add('open'); updateStorInfo(); pushModal(()=>wmModal.classList.remove('open')); };
+
+/* ---------- info & bersihkan penyimpanan ---------- */
+function fmtKB(b){ return b>1048576 ? (b/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(b/1024))+' KB'; }
+async function updateStorInfo(){
+  const el=$('#storInfo'); if(!el) return;
+  try{
+    const raw=localStorage.getItem('so_log')||'[]';
+    const nLog=readLog().length;
+    let nGal=0, szGal=0;
+    try{
+      const all=await idbAll();
+      nGal=all.length;
+      all.forEach(r=>{ szGal += (r.thumb&&r.thumb.size||0) + (r.full&&r.full.size||0); });
+    }catch(e){}
+    el.textContent='Log: '+nLog+' entri ('+fmtKB(raw.length)+') · Galeri sesi: '+nGal+' foto ('+fmtKB(szGal)+')';
+  }catch(e){ el.textContent='-'; }
+}
+async function idbClearPhotos(){ const d=await idb(); return new Promise((res,rej)=>{ const t=d.transaction('photos','readwrite'); t.objectStore('photos').clear(); t.oncomplete=res; t.onerror=()=>rej(t.error); }); }
+$('#clrLog').onclick=async ()=>{
+  if(!(await customConfirm('Hapus semua log foto (data CSV)? Foto asli TIDAK ikut kehapus.'))) return;
+  localStorage.removeItem('so_log');
+  showToast('Log dibersihkan'); updateStorInfo();
+};
+$('#clrGal').onclick=async ()=>{
+  if(!(await customConfirm('Kosongkan galeri sesi (thumbnail di app)? Foto asli di Pictures/SnapName TIDAK ikut kehapus.'))) return;
+  try{ await idbClearPhotos(); }catch(e){}
+  refreshThumbBtn(); showToast('Galeri sesi dibersihkan'); updateStorInfo();
+};
 $('#wmClose').onclick = ()=>history.back();
 $('#wmPick').onclick  = ()=>wmFile.click();
 $('#wmDel').onclick   = ()=>{ wmImg=null; localStorage.removeItem('so_logo');
@@ -841,7 +879,31 @@ $('#confirmNo').onclick =()=>_confirmDone(false);
 const galleryBtn=$('#galleryBtn'), galModal=$('#galModal'), galGrid=$('#galGrid'),
       galView=$('#galView'), galImg=$('#galImg'), galName=$('#galName'),
       galTitle=$('#galTitle'), galPos=$('#galPos'), galStage=$('#galStage');
-const GAL_MAX=50;
+const GAL_MAX=250;         // galeri sesi: 250 thumbnail terakhir (thumb ~40KB -> max ~10MB)
+const LOG_KEEP_DAYS=30;    // log CSV: auto-hapus entri lebih tua dari 30 hari
+
+// SANITASI STORAGE (jalan tiap buka app):
+// 1) log > 30 hari dibuang  2) migrasi sekali: buang full-res sisa versi lama dari galeri
+(function cleanStorage(){
+  try{
+    const cut=Date.now()-LOG_KEEP_DAYS*86400000;
+    const log=readLog(), fresh=log.filter(e=>{ const t=Date.parse(e.time||''); return !isNaN(t) && t>=cut; });
+    if(fresh.length!==log.length){
+      localStorage.setItem('so_log', JSON.stringify(fresh));
+    }
+  }catch(e){}
+  if(localStorage.getItem('so_mig_full')!=='1'){
+    setTimeout(async ()=>{
+      try{
+        const all=await idbAll();
+        for(const r of all){
+          if(r.full && r.uri){ r.full=null; await idbAdd(r); }  // viewer stream dari file asli
+        }
+        localStorage.setItem('so_mig_full','1');
+      }catch(e){}
+    }, 2500);
+  }
+})();
 
 // --- IndexedDB ---
 let _db=null;

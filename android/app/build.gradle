@@ -14,8 +14,8 @@ android {
         applicationId 'com.stockopname.snapname'
         minSdk 24
         targetSdk 34
-        versionCode 21
-        versionName '4.04'
+        versionCode 22
+        versionName '4.05'
     }
 
     signingConfigs {
