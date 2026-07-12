@@ -164,6 +164,10 @@
   /* kotak 1:1 pakai trik padding-bottom (aspect-ratio ga didukung sebagian WebView -> sel numpuk) */
   .galCell{position:relative;height:0;padding-bottom:100%;border-radius:8px;overflow:hidden;background:#1b2233}
   .galCell img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  /* pembatas tanggal di grid (kaya galeri HP) */
+  .galDate{grid-column:1/-1;display:flex;align-items:center;gap:10px;
+    color:var(--muted);font-size:12px;font-weight:700;margin:8px 2px 0;white-space:nowrap}
+  .galDate::after{content:'';flex:1;height:1px;background:var(--line)}
   /* mode pilih (multi-delete) */
   .galCell .ck{position:absolute;top:6px;right:6px;width:22px;height:22px;border-radius:50%;z-index:2;
     background:#0008;border:2px solid #fff;display:none;align-items:center;justify-content:center;font-size:13px;color:#fff}
@@ -338,7 +342,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v4.02</div>
+    <div id="startCredit">By Jova/Listira<br>v4.03</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -922,19 +926,47 @@ function renderGrid(){
     galGrid.innerHTML='<div id="galEmpty">Belum ada foto.<br>Foto tetap aman di Galeri HP (Pictures/SnapName).</div>';
     return;
   }
+  const BULAN=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
+  const todayKey=new Date().toDateString();
+  let lastDateKey=null;
   galRecs.forEach((g,idx)=>{
+    // pembatas tanggal (grid urut terbaru dulu -> sekat tiap ganti hari)
+    const d=new Date(g.time||0), key=d.toDateString();
+    if(key!==lastDateKey){
+      lastDateKey=key;
+      const hd=document.createElement('div'); hd.className='galDate';
+      hd.textContent=(key===todayKey?'Hari ini · ':'')+d.getDate()+' '+BULAN[d.getMonth()]+' '+d.getFullYear();
+      galGrid.appendChild(hd);
+    }
     const url=URL.createObjectURL(g.thumb); gridUrls.push(url);
     const cell=document.createElement('div'); cell.className='galCell';
     const im=document.createElement('img'); im.src=url; im.loading='lazy';
     const sp=document.createElement('span'); sp.textContent=g.name;
     const ck=document.createElement('div'); ck.className='ck'; ck.textContent='✓';
     cell.appendChild(im); cell.appendChild(sp); cell.appendChild(ck);
+    const toggleSel=()=>{
+      if(selIds.has(g.id)) selIds.delete(g.id); else selIds.add(g.id);
+      cell.classList.toggle('sel', selIds.has(g.id));
+      updateSelUI();
+    };
+    // TAP & HOLD = langsung masuk mode pilih (kaya galeri HP)
+    let lpT=null, lpFired=false;
+    const lpStart=()=>{ lpFired=false; clearTimeout(lpT);
+      lpT=setTimeout(()=>{ lpFired=true;
+        if(!selMode){ selMode=true; selIds.clear(); }
+        if(!selIds.has(g.id)) toggleSel(); else updateSelUI();
+        if(navigator.vibrate) try{ navigator.vibrate(30); }catch(e){}
+      }, 450); };
+    const lpCancel=()=>clearTimeout(lpT);
+    cell.addEventListener('touchstart', lpStart, {passive:true});
+    cell.addEventListener('touchmove',  lpCancel, {passive:true});
+    cell.addEventListener('touchend',   lpCancel, {passive:true});
+    cell.addEventListener('contextmenu', e=>{ e.preventDefault(); if(!lpFired){ lpFired=true;
+      if(!selMode){ selMode=true; selIds.clear(); }
+      if(!selIds.has(g.id)) toggleSel(); else updateSelUI(); } });
     cell.onclick=()=>{
-      if(selMode){
-        if(selIds.has(g.id)) selIds.delete(g.id); else selIds.add(g.id);
-        cell.classList.toggle('sel', selIds.has(g.id));
-        updateSelUI();
-      } else openLightbox(idx);
+      if(lpFired){ lpFired=false; return; }   // click bawaan setelah long-press -> abaikan
+      if(selMode) toggleSel(); else openLightbox(idx);
     };
     galGrid.appendChild(cell);
   });
