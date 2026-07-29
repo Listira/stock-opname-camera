@@ -366,7 +366,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v4.12</div>
+    <div id="startCredit">By Jova/Listira<br>v4.13</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -565,39 +565,81 @@ function classifyLens(label, idx){
   return idx===0 ? {factor:1, label:'1x'} : null;   // tanpa petunjuk: cuma percaya kamera pertama
 }
 
-let lensDiag='(belum dicek)';
+let lensDiag='(belum dicek)', nativeCams=null;
+function fmtFactor(f){ return (f<1 ? f.toFixed(1) : (Math.abs(f-Math.round(f))<0.15 ? String(Math.round(f)) : f.toFixed(1)))+'x'; }
+
 async function detectLenses(){
   if(lensReady) return;
   lensReady=true;
-  // ---- CARA 1: HP expose beberapa kamera belakang sebagai device terpisah ----
-  let list=[];
+  let list=[], webDevs=[];
+  // ---- Daftar kamera versi WEB (bisa dibuka langsung lewat deviceId) ----
   try{
     if(navigator.mediaDevices && navigator.mediaDevices.enumerateDevices){
       const devs=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
-      lensDiag='Kamera terdeteksi: '+devs.length+'\n'+
+      webDevs=devs.filter(d=>!/front|user|depan|selfie/i.test(d.label||''));
+      if(!webDevs.length) webDevs=devs;
+      lensDiag='WebView kasih '+devs.length+' kamera:\n'+
         devs.map((d,i)=>' ['+i+'] "'+(d.label||'(tanpa label)')+'"').join('\n');
-      const back=devs.filter(d=>!/front|user|depan|selfie/i.test(d.label||''));
-      const pool=(back.length?back:devs);
-      pool.forEach((d,i)=>{
-        const c=classifyLens(d.label,i);
-        if(c && !list.some(l=>Math.abs(l.factor-c.factor)<0.01)) list.push({id:d.deviceId, factor:c.factor, label:c.label});
-      });
     }
   }catch(e){ lensDiag='enumerateDevices error: '+e.message; }
 
-  // ---- CARA 2 (paling umum di Android): cuma 1 "kamera logis", pergantian lensa
-  // dilakukan SISTEM lewat zoom native. Bikin chip dari rentang zoom kamera. ----
+  // ---- CARA 1 (PALING AKURAT): tanya NATIVE Camera2 — sama sumbernya kaya kamera
+  // bawaan/WhatsApp. Faktor lensa dihitung dari focal length beneran. ----
+  try{
+    if(window.AndroidSaver && window.AndroidSaver.cameraInfo){
+      nativeCams=JSON.parse(window.AndroidSaver.cameraInfo()||'{}');
+      if(nativeCams && nativeCams.cams){
+        lensDiag += '\n\nNative Camera2 — kamera belakang: '+nativeCams.cams.length+
+          '\n'+nativeCams.cams.map(c=>' id '+c.id+': focal '+(+c.focal).toFixed(2)+'mm → '+fmtFactor(c.factor)+(c.logical?' [logical]':'')).join('\n')+
+          '\nRentang zoom native: '+nativeCams.zoomMin+' – '+nativeCams.zoomMax;
+        // kalau WebView ngasih jumlah kamera belakang yang sama -> cocokkan per urutan
+        if(nativeCams.cams.length>1 && webDevs.length>=nativeCams.cams.length){
+          nativeCams.cams.forEach((c,i)=>{
+            if(c.factor>0 && webDevs[i]) list.push({id:webDevs[i].deviceId, factor:c.factor, label:fmtFactor(c.factor)});
+          });
+        }
+      }
+    }
+  }catch(e){ lensDiag += '\ncameraInfo error: '+e.message; }
+
+  // ---- CARA 2: tebak dari label kamera versi web (kalau native ga tersedia) ----
+  if(list.length<2){
+    webDevs.forEach((d,i)=>{
+      const c=classifyLens(d.label,i);
+      if(c && !list.some(l=>Math.abs(l.factor-c.factor)<0.01)) list.push({id:d.deviceId, factor:c.factor, label:c.label});
+    });
+  }
+
+  // ---- CARA 3 (paling umum di Android): cuma 1 "kamera logis" yang kebuka, pergantian
+  // lensa fisik dilakukan SISTEM lewat zoom — persis mekanisme kamera bawaan/WhatsApp.
+  // Chip dibikin dari rentang zoom + faktor lensa asli hasil baca native. ----
   const caps = track && track.getCapabilities ? track.getCapabilities() : {};
   const zc = caps && caps.zoom;
-  lensDiag += '\nZoom native: '+(zc ? (zc.min+' – '+zc.max+(zc.step?(' step '+zc.step):'')) : 'TIDAK didukung')
+  lensDiag += '\n\nZoom lewat WebView: '+(zc ? (zc.min+' – '+zc.max+(zc.step?(' step '+zc.step):'')) : 'TIDAK didukung')
             + '\nMode zoom: '+zoomMode;
   if(list.length<2 && zc && zc.max>zc.min){
     const zl=[];
-    const add=(f,lab)=>{ if(f>=zc.min-1e-6 && f<=zc.max+1e-6 && !zl.some(x=>Math.abs(x.factor-f)<0.01)) zl.push({id:null,factor:f,label:lab,nativeZoom:true}); };
-    if(zc.min<0.7) add(Math.max(zc.min,0.5),'0.5x');    // ultrawide (kalau ada)
-    add(Math.max(1,zc.min),'1x');
-    [2,3,5].forEach(f=>{ if(zc.max>=f) add(f,f+'x'); });
+    const add=(f,lab)=>{
+      // lensa di luar rentang zoom (mis. ultrawide 0.4x tapi zoom mentok 0.6x)
+      // -> pakai batas terdekat; sistem tetap pindah ke lensa itu
+      f=Math.min(zc.max, Math.max(zc.min, f));
+      if(!zl.some(x=>Math.abs(x.factor-f)<0.05))
+        zl.push({id:null,factor:+f.toFixed(2),label:lab||fmtFactor(f),nativeZoom:true});
+    };
+    // pakai faktor lensa ASLI dari native (mis. 0.6x / 1x / 3.2x), bukan tebakan
+    if(nativeCams && nativeCams.cams && nativeCams.cams.length>1){
+      nativeCams.cams.forEach(c=>{ if(c.factor>0) add(+c.factor); });
+    }
+    if(zl.length<2){                     // native ga ngasih -> pakai tangga standar
+      if(zc.min<0.7) add(Math.max(zc.min,0.5),'0.5x');
+      add(Math.max(1,zc.min),'1x');
+      [2,3,5].forEach(f=>{ if(zc.max>=f) add(f); });
+    }
     if(zl.length>1) list=zl;
+  }
+  if(list.length<2){
+    lensDiag += '\n\n⚠ Chip lensa disembunyikan: WebView di HP ini ga ngasih akses '
+              + 'lensa tambahan MAUPUN zoom optik ke aplikasi web.';
   }
 
   if(list.length>1){
@@ -650,7 +692,8 @@ async function setZoomEff(eff){
     eff=Math.min(maxZoom, Math.max(minZoom, eff));
     curZoom=eff;
     try{ await track.applyConstraints({advanced:[{zoom:eff}]}); }catch(e){}
-    let b=0; for(let i=0;i<lenses.length;i++) if(eff>=lenses[i].factor-1e-3) b=i;
+    // toleransi 3%: faktor lensa hasil hitung focal jarang bulat (mis. 2.22x)
+    let b=0; for(let i=0;i<lenses.length;i++) if(eff >= lenses[i].factor*0.97) b=i;
     if(b!==curLens){ curLens=b; renderLensChips(); }
     showZoom();
     return;

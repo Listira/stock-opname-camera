@@ -344,6 +344,74 @@ public class SaverBridge {
     @JavascriptInterface
     public String getSavePort() { return port > 0 ? (port + "|" + token) : ""; }
 
+    /**
+     * Info lensa dari CAMERA2 (jalur native, kaya kamera bawaan/WhatsApp) — WebView
+     * sering ga ngasih label kamera ke web, jadi faktor lensa (0.5x/1x/2x) kita hitung
+     * dari FOCAL LENGTH beneran: faktor = focal_lensa / focal_lensa_utama.
+     * Balikin JSON: {main:"0", zoomMin, zoomMax, cams:[{id,facing,focal,factor,logical}]}
+     */
+    @JavascriptInterface
+    public String cameraInfo() {
+        StringBuilder sb = new StringBuilder();
+        try {
+            android.hardware.camera2.CameraManager cm =
+                    (android.hardware.camera2.CameraManager) ctx.getSystemService(Context.CAMERA_SERVICE);
+            String[] ids = cm.getCameraIdList();
+            java.util.List<String> backIds = new java.util.ArrayList<>();
+            java.util.Map<String, Float> focals = new java.util.LinkedHashMap<>();
+            java.util.Map<String, Boolean> logicals = new java.util.LinkedHashMap<>();
+            float zMin = 1f, zMax = 1f;
+
+            for (String id : ids) {
+                android.hardware.camera2.CameraCharacteristics ch = cm.getCameraCharacteristics(id);
+                Integer face = ch.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING);
+                boolean back = face != null && face == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK;
+                if (!back) continue;
+                backIds.add(id);
+                float[] fl = ch.get(android.hardware.camera2.CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
+                focals.put(id, (fl != null && fl.length > 0) ? fl[0] : 0f);
+
+                boolean isLogical = false;
+                if (Build.VERSION.SDK_INT >= 28) {
+                    int[] caps = ch.get(android.hardware.camera2.CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES);
+                    if (caps != null) for (int c : caps)
+                        if (c == android.hardware.camera2.CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA)
+                            isLogical = true;
+                }
+                logicals.put(id, isLogical);
+
+                if (Build.VERSION.SDK_INT >= 30) {
+                    android.util.Range<Float> zr = ch.get(
+                            android.hardware.camera2.CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE);
+                    if (zr != null) {
+                        if (zr.getLower() < zMin) zMin = zr.getLower();
+                        if (zr.getUpper() > zMax) zMax = zr.getUpper();
+                    }
+                }
+            }
+            // lensa utama = kamera belakang pertama (Android: id "0"), jadi patokan 1x
+            String mainId = backIds.isEmpty() ? "" : backIds.get(0);
+            float mainFocal = mainId.isEmpty() ? 0f : focals.get(mainId);
+
+            sb.append("{\"main\":\"").append(mainId).append("\",\"zoomMin\":").append(zMin)
+              .append(",\"zoomMax\":").append(zMax).append(",\"cams\":[");
+            boolean first = true;
+            for (String id : backIds) {
+                float f = focals.get(id);
+                float factor = (mainFocal > 0 && f > 0) ? (f / mainFocal) : 0f;
+                if (!first) sb.append(',');
+                first = false;
+                sb.append("{\"id\":\"").append(id).append("\",\"focal\":").append(f)
+                  .append(",\"factor\":").append(factor)
+                  .append(",\"logical\":").append(logicals.get(id) ? "true" : "false").append('}');
+            }
+            sb.append("]}");
+            return sb.toString();
+        } catch (Exception e) {
+            return "{\"error\":\"" + String.valueOf(e.getMessage()).replace("\"", "'") + "\"}";
+        }
+    }
+
     /** Nama file FINAL di disk (MediaStore auto-rename dobel jadi "Nama (2).jpg"). */
     private String displayNameOf(String uri, String fallback) {
         try {
