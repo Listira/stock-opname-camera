@@ -366,7 +366,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v4.11</div>
+    <div id="startCredit">By Jova/Listira<br>v4.12</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -1168,7 +1168,7 @@ const GRID_PAGE=90;        // render bertahap: 1000 sel sekaligus bikin galeri b
 let gridShown=0;
 function renderGrid(){
   gridUrls.forEach(u=>URL.revokeObjectURL(u)); gridUrls=[];
-  galTitle.textContent='Foto sesi ini ('+galRecs.length+')';
+  galTitle.textContent='Foto sesi ini ('+(galTotal||galRecs.length)+')';
   galGrid.innerHTML=''; gridShown=0;
   if(!galRecs.length){
     galGrid.innerHTML='<div id="galEmpty">Belum ada foto.<br>Foto tetap aman di Galeri HP (Pictures/SnapName).</div>';
@@ -1237,7 +1237,7 @@ function exitSelMode(){ closeModal(selSilentExit); }
 function updateSelUI(){
   galGrid.classList.toggle('selmode', selMode);
   const b=$('#galSel');
-  if(!selMode){ b.textContent='Pilih'; galTitle.textContent='Foto sesi ini ('+galRecs.length+')'; }
+  if(!selMode){ b.textContent='Pilih'; galTitle.textContent='Foto sesi ini ('+(galTotal||galRecs.length)+')'; }
   else { b.textContent = selIds.size ? ('🗑 Hapus '+selIds.size) : 'Batal';
          galTitle.textContent='Pilih foto'; }
 }
@@ -1252,33 +1252,60 @@ $('#galSel').onclick=async ()=>{
     try{ await idbDel(r.id); }catch(e){}
   }
   galRecs=galRecs.filter(g=>!ids.has(g.id));
+  galTotal=Math.max(0, galTotal-ids.size);
   exitSelMode();
   refreshThumbBtn(); renderGrid();
   showToast(ids.size+' foto dihapus');
 };
 
+// Ambil galeri PER HALAMAN (cursor terbaru dulu) — dulu idbAll() ngangkat SEMUA
+// thumbnail (1000 x ~30KB = 30MB) tiap buka galeri = delay berdetik-detik.
+async function idbPage(offset, limit){
+  const d=await idb();
+  return new Promise((res,rej)=>{
+    const out=[]; let skipped=false;
+    const q=d.transaction('photos','readonly').objectStore('photos').openCursor(null,'prev');
+    q.onsuccess=()=>{
+      const c=q.result; if(!c) return res(out);
+      if(offset>0 && !skipped){ skipped=true; c.advance(offset); return; }
+      out.push(c.value);
+      if(out.length>=limit) return res(out);
+      c.continue();
+    };
+    q.onerror=()=>rej(q.error);
+  });
+}
+let galTotal=0;
 async function openGallery(){
-  let all=[]; try{ all=await idbAll(); }catch(e){}
-  // SINKRON sama Galeri HP: foto yang udah dihapus di luar app -> buang dari sini juga
-  try{
-    if(window.AndroidSaver && window.AndroidSaver.missingUris){
-      const us=all.map(r=>r.uri||'').filter(Boolean);
-      if(us.length){
-        const miss=(window.AndroidSaver.missingUris(us.join('|'))||'').split('|').filter(Boolean);
-        if(miss.length){
-          const gone=new Set(miss);
-          for(const r of all){ if(gone.has(r.uri)){ try{ await idbDel(r.id); }catch(e){} } }
-          all=all.filter(r=>!gone.has(r.uri));
-          refreshThumbBtn();
-        }
-      }
-    }
-  }catch(e){}
-  galRecs=all.slice().reverse();   // terbaru dulu
+  // buka MODAL DULU biar kerasa instan, isinya nyusul
   selMode=false; selIds.clear();
-  renderGrid();
+  galRecs=[]; galTotal=0;
+  galGrid.innerHTML=''; gridShown=0;
+  galTitle.textContent='Foto sesi ini…';
   galModal.classList.add('open');
   pushModal(closeGallery);
+  try{
+    galTotal=await idbCount();
+    galRecs=await idbPage(0, GRID_PAGE);   // cuma 1 halaman, bukan semua
+  }catch(e){}
+  renderGrid();
+  syncMissing();                            // cek file kehapus: async, ga nahan UI
+}
+
+// Sinkron sama Galeri HP — cuma buat foto yang KELIHATAN, dicicil biar ga nge-blok.
+async function syncMissing(){
+  try{
+    if(!(window.AndroidSaver && window.AndroidSaver.missingUris)) return;
+    const us=galRecs.slice(0, gridShown||GRID_PAGE).map(r=>r.uri||'').filter(Boolean);
+    if(!us.length) return;
+    const miss=(window.AndroidSaver.missingUris(us.join('|'))||'').split('|').filter(Boolean);
+    if(!miss.length) return;
+    const gone=new Set(miss);
+    for(const r of galRecs){ if(gone.has(r.uri)){ try{ await idbDel(r.id); }catch(e){} } }
+    galRecs=galRecs.filter(r=>!gone.has(r.uri));
+    galTotal=Math.max(0, galTotal-gone.size);
+    refreshThumbBtn(); renderGrid();
+  }catch(e){}
 }
 function closeGallery(){
   galModal.classList.remove('open');
@@ -1312,6 +1339,7 @@ async function delCurrent(){
   try{ if(window.AndroidSaver && window.AndroidSaver.deletePhoto) window.AndroidSaver.deletePhoto(g.uri||''); }catch(e){}
   try{ await idbDel(g.id); }catch(e){}
   galRecs.splice(viewIdx,1);
+  galTotal=Math.max(0, galTotal-1);
   await refreshThumbBtn();
   renderGrid();
   if(!galRecs.length){ history.back(); return; }   // tutup lightbox -> grid (kosong)
@@ -1330,8 +1358,18 @@ async function delCurrent(){
 })();
 
 // scroll mentok bawah -> render halaman berikutnya (galeri 1000 foto tetap enteng)
-galGrid.addEventListener('scroll', ()=>{
-  if(gridShown<galRecs.length && galGrid.scrollTop+galGrid.clientHeight > galGrid.scrollHeight-600) appendGridPage();
+let loadingPage=false;
+galGrid.addEventListener('scroll', async ()=>{
+  if(loadingPage) return;
+  if(galGrid.scrollTop+galGrid.clientHeight < galGrid.scrollHeight-600) return;
+  if(gridShown<galRecs.length){ appendGridPage(); return; }
+  if(galRecs.length>=galTotal) return;
+  loadingPage=true;
+  try{
+    const more=await idbPage(galRecs.length, GRID_PAGE);   // halaman berikutnya dari DB
+    if(more.length){ galRecs=galRecs.concat(more); appendGridPage(); }
+  }catch(e){}
+  loadingPage=false;
 }, {passive:true});
 
 galleryBtn.onclick=openGallery;

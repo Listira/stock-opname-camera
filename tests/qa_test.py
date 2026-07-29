@@ -239,6 +239,7 @@ with sync_playwright() as p:
         time.sleep(0.1)
     check("thumb button populated after saves", ok)
     page.click("#galleryBtn"); page.wait_for_selector("#galModal.open", timeout=3000)
+    page.wait_for_selector(".galCell", timeout=5000)   # modal buka instan, isi nyusul (paging)
     n=page.evaluate("galRecs.length")
     check("grid loaded from IndexedDB", n>0, f"{n} photos")
     check("grid cells == photos", page.eval_on_selector_all(".galCell","e=>e.length")==n)
