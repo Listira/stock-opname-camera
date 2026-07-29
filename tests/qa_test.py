@@ -197,7 +197,8 @@ with sync_playwright() as p:
     with page.expect_download(timeout=4000) as gdl:
         page.click("#saveBtn")
     check("capture+save works with GPS stamp", gdl.value.suggested_filename=="GPS-TEST.jpg", gdl.value.suggested_filename)
-    last = page.evaluate("(JSON.parse(localStorage.getItem('so_log')||'[]')).slice(-1)[0]")
+    time.sleep(0.5)   # log ditulis async ke IndexedDB
+    last = page.evaluate("(async()=>{const l=await logAll(); return l[l.length-1];})()")
     check("photo logged with latitude", bool(last) and abs(float(last.get('lat',0))-(-6.264199))<0.01, str(last)[:80])
     with page.expect_download(timeout=4000) as cdl:
         page.evaluate("exportCSV()")
