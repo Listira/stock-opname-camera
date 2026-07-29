@@ -346,6 +346,12 @@
       <button class="btn ghost" id="csvBtn" style="width:100%;margin-top:8px">Ekspor Log CSV</button>
 
       <hr class="setDiv">
+      <div class="setHead">🔎 Info Kamera &amp; Lensa</div>
+      <div class="setNote">Buat ngecek kenapa tombol lensa (0.5x/1x/2x) muncul atau nggak di HP ini.</div>
+      <pre id="lensDiag" style="white-space:pre-wrap;font-size:11px;color:var(--muted);
+        background:#0e1320;border:1px solid var(--line);border-radius:10px;padding:10px;margin:8px 0 0;overflow:auto">-</pre>
+
+      <hr class="setDiv">
       <div class="setHead">🧹 Penyimpanan</div>
       <div class="setNote" id="storInfo">Menghitung…</div>
       <div class="setNote" style="color:var(--ok)">Foto asli di Galeri HP (Pictures/SnapName) TIDAK ikut kehapus.</div>
@@ -360,7 +366,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v4.1</div>
+    <div id="startCredit">By Jova/Listira<br>v4.11</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -398,8 +404,7 @@ const CAM_RES = {
   'max':   {width:99999, height:99999},
 };
 let camRes = localStorage.getItem('so_res') || '2k';
-let blobReady=false;       // true kalau blob foto SAAT INI sudah jadi
-let pendingSave=false;     // user pencet Simpan sebelum blob jadi -> antri, auto-save pas siap
+let blobPromise=null;      // encode JPEG foto saat ini (save ga pernah nunggu ini)
 let lastPvCanvas=null;     // kanvas preview kecil foto terakhir -> sumber thumbnail galeri
 // Jalur save TERCEPAT: kirim JPEG bytes mentah ke server lokal di dalam APK (tanpa base64)
 let savePort=null;
@@ -539,7 +544,12 @@ async function setZoom(z){
    lensa x zoom digital/native di lensa itu; pas user cubit melewati faktor
    lensa lain, lensanya ditukar otomatis dan zoom di-nol-in lagi. */
 let lenses=[{id:null,factor:1,label:'1x'}], curLens=0, lensReady=false;
-function effZoom(){ return (lenses[curLens]?lenses[curLens].factor:1) * curZoom; }
+// mode "1 kamera logis": sistem yang pindah lensa lewat zoom native -> curZoom = zoom ABSOLUT
+function nativeLensMode(){ return lenses.length>1 && !!lenses[0].nativeZoom; }
+function effZoom(){
+  if(nativeLensMode()) return curZoom;
+  return (lenses[curLens]?lenses[curLens].factor:1) * curZoom;
+}
 
 function classifyLens(label, idx){
   const s=(label||'').toLowerCase();
@@ -555,24 +565,50 @@ function classifyLens(label, idx){
   return idx===0 ? {factor:1, label:'1x'} : null;   // tanpa petunjuk: cuma percaya kamera pertama
 }
 
+let lensDiag='(belum dicek)';
 async function detectLenses(){
-  if(lensReady || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
-  try{
-    const devs=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
-    const back=devs.filter(d=>!/front|user|depan|selfie/i.test(d.label||''));
-    const list=[]; const pool=(back.length?back:devs);
-    pool.forEach((d,i)=>{
-      const c=classifyLens(d.label,i);
-      if(c && !list.some(l=>Math.abs(l.factor-c.factor)<0.01)) list.push({id:d.deviceId, factor:c.factor, label:c.label});
-    });
-    if(list.length>1){
-      list.sort((a,b)=>a.factor-b.factor);
-      lenses=list; curLens=Math.max(0, list.findIndex(l=>l.factor===1));
-      if(curLens<0) curLens=0;
-      renderLensChips();
-    }
-  }catch(e){}
+  if(lensReady) return;
   lensReady=true;
+  // ---- CARA 1: HP expose beberapa kamera belakang sebagai device terpisah ----
+  let list=[];
+  try{
+    if(navigator.mediaDevices && navigator.mediaDevices.enumerateDevices){
+      const devs=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
+      lensDiag='Kamera terdeteksi: '+devs.length+'\n'+
+        devs.map((d,i)=>' ['+i+'] "'+(d.label||'(tanpa label)')+'"').join('\n');
+      const back=devs.filter(d=>!/front|user|depan|selfie/i.test(d.label||''));
+      const pool=(back.length?back:devs);
+      pool.forEach((d,i)=>{
+        const c=classifyLens(d.label,i);
+        if(c && !list.some(l=>Math.abs(l.factor-c.factor)<0.01)) list.push({id:d.deviceId, factor:c.factor, label:c.label});
+      });
+    }
+  }catch(e){ lensDiag='enumerateDevices error: '+e.message; }
+
+  // ---- CARA 2 (paling umum di Android): cuma 1 "kamera logis", pergantian lensa
+  // dilakukan SISTEM lewat zoom native. Bikin chip dari rentang zoom kamera. ----
+  const caps = track && track.getCapabilities ? track.getCapabilities() : {};
+  const zc = caps && caps.zoom;
+  lensDiag += '\nZoom native: '+(zc ? (zc.min+' – '+zc.max+(zc.step?(' step '+zc.step):'')) : 'TIDAK didukung')
+            + '\nMode zoom: '+zoomMode;
+  if(list.length<2 && zc && zc.max>zc.min){
+    const zl=[];
+    const add=(f,lab)=>{ if(f>=zc.min-1e-6 && f<=zc.max+1e-6 && !zl.some(x=>Math.abs(x.factor-f)<0.01)) zl.push({id:null,factor:f,label:lab,nativeZoom:true}); };
+    if(zc.min<0.7) add(Math.max(zc.min,0.5),'0.5x');    // ultrawide (kalau ada)
+    add(Math.max(1,zc.min),'1x');
+    [2,3,5].forEach(f=>{ if(zc.max>=f) add(f,f+'x'); });
+    if(zl.length>1) list=zl;
+  }
+
+  if(list.length>1){
+    list.sort((a,b)=>a.factor-b.factor);
+    lenses=list;
+    let i=list.findIndex(l=>Math.abs(l.factor-1)<0.01);
+    curLens = i>=0 ? i : 0;
+    renderLensChips();
+    $('#lensRow').classList.toggle('show', facing==='environment');
+    if(nativeLensMode()) setZoomEff(1);   // mulai di 1x, bukan di zoom minimum kamera
+  }
 }
 
 function renderLensChips(){
@@ -593,6 +629,7 @@ function renderLensChips(){
 let switching=false;
 async function useLens(idx, zoomOnLens){
   if(switching || idx<0 || idx>=lenses.length) return;
+  if(nativeLensMode()){ await setZoomEff(lenses[idx].factor); return; }  // sistem yang pindah lensa
   if(idx===curLens){ setZoom(zoomOnLens||1); return; }
   switching=true;
   const prev=curLens;
@@ -608,6 +645,16 @@ async function useLens(idx, zoomOnLens){
 
 // zoom EFEKTIF (dipakai gesture cubit): pilih lensa terbaik + sisanya digital
 async function setZoomEff(eff){
+  // MODE 1 KAMERA LOGIS: zoom native = absolut, sistem yang tukar lensa fisik
+  if(nativeLensMode()){
+    eff=Math.min(maxZoom, Math.max(minZoom, eff));
+    curZoom=eff;
+    try{ await track.applyConstraints({advanced:[{zoom:eff}]}); }catch(e){}
+    let b=0; for(let i=0;i<lenses.length;i++) if(eff>=lenses[i].factor-1e-3) b=i;
+    if(b!==curLens){ curLens=b; renderLensChips(); }
+    showZoom();
+    return;
+  }
   eff=Math.max(lenses[0].factor, Math.min(lenses[lenses.length-1].factor*maxZoom, eff));
   if(lenses.length>1 && !switching){
     let best=0;
@@ -746,6 +793,9 @@ async function updateStorInfo(){
       all.forEach(r=>{ szGal += (r.thumb&&r.thumb.size||0) + (r.full&&r.full.size||0); });
     }catch(e){}
     el.textContent='Log: '+nLog+' entri (~'+fmtKB(nLog*180)+') · Galeri sesi: '+nGal+' foto ('+fmtKB(szGal)+')';
+    const dg=$('#lensDiag');
+    if(dg) dg.textContent = lensDiag + '\nLensa aktif: ' + lenses.map((l,i)=>(i===curLens?'['+l.label+']':l.label)).join(' ')
+        + '\nChip lensa: ' + (lenses.length>1 ? 'TAMPIL' : 'disembunyikan (cuma 1 lensa kebaca)');
   }catch(e){ el.textContent='-'; }
 }
 async function idbClearPhotos(){ const d=await idb(); return new Promise((res,rej)=>{ const t=d.transaction('photos','readwrite'); t.objectStore('photos').clear(); t.oncomplete=res; t.onerror=()=>rej(t.error); }); }
@@ -998,25 +1048,42 @@ const LOG_KEEP_DAYS=30;    // log CSV: auto-hapus entri lebih tua dari 30 hari
 (function cleanStorage(){
   setTimeout(async ()=>{
     try{
-      // migrasi sekali: log lama di localStorage -> IndexedDB, lalu localStorage dikosongkan
+      // Migrasi log lama localStorage -> IndexedDB dalam SATU transaksi.
+      // (dulu 1 transaksi per entri -> ribuan transaksi ngantri = SEMUA operasi
+      //  database lain ikut lemot, dan ngulang dari nol kalau app ditutup)
       const raw=localStorage.getItem('so_log');
+      localStorage.removeItem('so_log');            // hapus DULU: ga akan keulang
       if(raw){
-        try{ for(const e of (JSON.parse(raw)||[])) await logAdd(e); }catch(e){}
-        localStorage.removeItem('so_log');
+        let arr=[]; try{ arr=JSON.parse(raw)||[]; }catch(e){}
+        if(arr.length){
+          const cut=Date.now()-LOG_KEEP_DAYS*86400000;
+          const d=await idb();
+          await new Promise(res=>{
+            const t=d.transaction('log','readwrite'), st=t.objectStore('log');
+            for(const e of arr){ const tt=Date.parse(e&&e.time||''); if(!isNaN(tt) && tt>=cut) st.add(e); }
+            t.oncomplete=res; t.onerror=res; t.onabort=res;
+          });
+        }
       }
       await logPrune(Date.now()-LOG_KEEP_DAYS*86400000);
     }catch(e){}
-  }, 1500);
+  }, 3000);
   if(localStorage.getItem('so_mig_full')!=='1'){
     setTimeout(async ()=>{
       try{
+        localStorage.setItem('so_mig_full','1');   // tandai DULU: ga keulang tiap buka app
         const all=await idbAll();
-        for(const r of all){
-          if(r.full && r.uri){ r.full=null; await idbAdd(r); }  // viewer stream dari file asli
+        const perlu=all.filter(r=>r.full && r.uri);
+        if(perlu.length){
+          const d=await idb();
+          await new Promise(res=>{                  // SATU transaksi buat semua
+            const t=d.transaction('photos','readwrite'), st=t.objectStore('photos');
+            for(const r of perlu){ r.full=null; st.put(r); }   // viewer stream dari file asli
+            t.oncomplete=res; t.onerror=res; t.onabort=res;
+          });
         }
-        localStorage.setItem('so_mig_full','1');
       }catch(e){}
-    }, 2500);
+    }, 5000);
   }
 })();
 
@@ -1319,16 +1386,17 @@ $('#shutter').onclick = ()=>{
   preview.style.backgroundImage=`url(${pv.toDataURL('image/jpeg',0.7)})`;
   lastPvCanvas=pv;   // sumber thumbnail galeri (murah, ga sentuh full-res)
   // Buka sheet + focus SEKARANG (masih dalam gesture tap) -> keyboard HP naik sendiri.
-  blobReady=false;                 // foto saat ini belum jadi
-  pendingSave=false;               // buang antrian save dari foto sebelumnya
   openSheet();
-  // Encode full-res async di belakang; blob buat disimpan.
-  shot.toBlob(b=>{
-    if(lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
-    lastBlob=b; lastBlobUrl=URL.createObjectURL(b);
-    blobReady=true;                // siap disimpan
-    if(pendingSave){ pendingSave=false; $('#saveBtn').click(); }  // save yang tadi diantri
-  },'image/jpeg',0.85);  // 0.85: encode+tulis lebih cepat, ~30% lebih kecil, visual setara
+  // Encode full-res JADI PROMISE. Save TIDAK PERNAH nunggu ini — sheet nutup instan,
+  // antrian background yang nungguin promise-nya. (dulu: blobReady/pendingSave bikin
+  // sheet ketahan sampai encode kelar = kerasa "nyangkut" di resolusi tinggi)
+  blobPromise = new Promise(res=>{
+    shot.toBlob(b=>{
+      if(lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
+      lastBlob=b; lastBlobUrl=b?URL.createObjectURL(b):null;
+      res(b);
+    },'image/jpeg',0.85);  // 0.85: encode+tulis lebih cepat, ~30% lebih kecil, visual setara
+  });
 };
 
 /* ---------- name sheet ---------- */
@@ -1366,7 +1434,7 @@ function openSheet(){
   nameInput.focus(); nameInput.select();
 }
 // tutup sheet TANPA nyentuh history (dipanggil juga oleh swipe/tombol back HP)
-function sheetSilentClose(){ sheet.classList.remove('open'); pendingSave=false; }
+function sheetSilentClose(){ sheet.classList.remove('open'); }
 function closeSheet(){ closeModal(sheetSilentClose); }
 
 $('#retakeBtn').onclick = closeSheet;
@@ -1379,49 +1447,46 @@ $('#saveBtn').onclick = ()=>{
     .replace(/^_+|_+$/g,'')          // buang underscore di ujung
     .slice(0,120);                   // batasi panjang (limit nama file Android ~255 byte)
   if(!name){ nameInput.focus(); showToast('Isi nama dulu'); return; }
-  // anti race: blob foto belum jadi -> ANTRIKAN save, jalan otomatis begitu siap.
-  // (dulu ditolak + toast; sekarang user ngetik kilat pun tetap kesimpen)
-  if(!blobReady || !lastBlobUrl){ pendingSave=true; return; }
-  // Nama dobel? SERAHIN ke Android (MediaStore) -> otomatis "Nama (2).jpg", "(3)" dst,
-  // konsisten walau app ditutup-buka. (Dedup internal DIHAPUS — dulu dobel sistem
-  // bikin hasil aneh "Nama(2) (2).jpg".)
+  // Nama dobel? SERAHIN ke Android (MediaStore) -> otomatis "Nama (2).jpg", "(3)" dst.
   const finalName=name;
   lastName=finalName; localStorage.setItem('so_lastname',finalName);
-  const myBlob=lastBlob, myPv=lastPvCanvas, myTags=sheetTags.join('|');  // kunci data foto INI
-  // ===== INSTAN (kaya kamera WA): sheet nutup SEKARANG, user langsung bisa jepret lagi.
+  const myBlobP=blobPromise, myPv=lastPvCanvas, myTags=sheetTags.join('|');  // kunci data foto INI
+  // ===== SHEET NUTUP SEKARANG, TANPA SYARAT. Encode + tulis file semua di belakang.
   count++; countEl.textContent=count;
   localStorage.setItem('so_count', count); localStorage.setItem('so_count_date', todayStr());
   closeSheet();
   showToast('✓ '+finalName+'.jpg');
-  const done=(r)=>{
+  const done=(r, blob)=>{
     const nm=(r && r.name) || (finalName+'.jpg');   // nama FINAL dari Android (bisa "(2)")
     logPhoto(nm, myTags);
-    pushGallery(nm, (r && r.uri) || '', myBlob, myPv);
-    if(count % 5 === 0) checkResources();   // pantau storage berkala
+    pushGallery(nm, (r && r.uri) || '', blob, myPv);
+    if(count % 20 === 0) checkResources();   // pantau storage sesekali
   };
   if(window.AndroidSaver && window.AndroidSaver.savePhoto){
     const la = (exifOn && shotPos) ? String(shotPos.coords.latitude)  : '';
     const lo = (exifOn && shotPos) ? String(shotPos.coords.longitude) : '';
-    // ANTRIAN SERIAL di background: jepret sekenceng apapun, tulisan file jalan
-    // satu-satu (disk HP ga keteteran), badge 💾 nyala selama masih ada antrian.
-    // OUTBOX dulu = jaring pengaman: app kebunuh/HP ke-lock sebelum kelar nulis
-    // -> foto TIDAK hilang, dilanjutin otomatis pas app dibuka lagi.
+    // ANTRIAN SERIAL di background: jepret sekenceng apapun, encode+tulis jalan
+    // satu-satu, badge 💾 nyala selama masih ada antrian.
     pendingWrites++; setPendingBadge();
     const obId='o'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
     obInFlight.add(obId);   // biar drainOutbox ga nyamber foto yang lagi diproses di sini
+    let myBlob=null;
     ioQueue = ioQueue
-      .then(()=>obPut({id:obId, name:finalName+'.jpg', la, lo, tags:myTags, blob:myBlob}).catch(()=>{}))
+      .then(()=>myBlobP)                       // tunggu encode-nya DI SINI, bukan di UI
+      .then(b=>{ myBlob=b; return obPut({id:obId, name:finalName+'.jpg', la, lo, tags:myTags, blob:b}).catch(()=>{}); })
       .then(()=>writePhoto(myBlob, finalName+'.jpg', la, lo))
-      .then(r=>{ obInFlight.delete(obId); obDel(obId).catch(()=>{}); done(r); },
+      .then(r=>{ obInFlight.delete(obId); obDel(obId).catch(()=>{}); done(r, myBlob); },
             ()=>{ // gagal (storage penuh dll) -> TETAP di outbox, dicoba lagi otomatis
                   obInFlight.delete(obId);
                   showToast('⚠ '+finalName+'.jpg belum kesimpen — dicoba lagi otomatis'); })
       .then(()=>{ pendingWrites--; setPendingBadge(); });
   } else {
-    const a=document.createElement('a');
-    a.href=lastBlobUrl; a.download=finalName+'.jpg';
-    document.body.appendChild(a); a.click(); a.remove();
-    done({uri:'', name:finalName+'.jpg'});
+    Promise.resolve(myBlobP).then(b=>{
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(b); a.download=finalName+'.jpg';
+      document.body.appendChild(a); a.click(); a.remove();
+      done({uri:'', name:finalName+'.jpg'}, b);
+    });
   }
 };
 
