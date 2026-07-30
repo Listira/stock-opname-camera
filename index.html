@@ -346,12 +346,8 @@
       <button class="btn ghost" id="csvBtn" style="width:100%;margin-top:8px">Ekspor Log CSV</button>
 
       <hr class="setDiv">
-      <div class="setHead">🔎 Info Kamera &amp; Lensa</div>
-      <div class="setNote">Buat ngecek kenapa tombol lensa (0.5x/1x/2x) muncul atau nggak di HP ini.</div>
-      <pre id="lensDiag" style="white-space:pre-wrap;font-size:11px;color:var(--muted);
-        background:#0e1320;border:1px solid var(--line);border-radius:10px;padding:10px;margin:8px 0 0;overflow:auto">-</pre>
+      <pre id="lensDiag" hidden></pre>
 
-      <hr class="setDiv">
       <div class="setHead">🧹 Penyimpanan</div>
       <div class="setNote" id="storInfo">Menghitung…</div>
       <div class="setNote" style="color:var(--ok)">Foto asli di Galeri HP (Pictures/SnapName) TIDAK ikut kehapus.</div>
@@ -366,7 +362,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v4.13</div>
+    <div id="startCredit">By Jova/Listira<br>v4.2</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -456,7 +452,9 @@ async function startCam(deviceId){
   try{
     if(stream) stream.getTracks().forEach(t=>t.stop());
     const rv = CAM_RES[camRes] || CAM_RES['2k'];
-    const vc = { width:{ideal:rv.width}, height:{ideal:rv.height} };
+    // frameRate dibatasi 30: preview 60fps bikin kamera+GPU kerja 2x lipat (boros baterai),
+    // sementara buat foto dokumentasi ga ada bedanya sama sekali.
+    const vc = { width:{ideal:rv.width}, height:{ideal:rv.height}, frameRate:{ideal:30, max:30} };
     if(deviceId && facing==='environment') vc.deviceId={exact:deviceId};   // lensa spesifik
     else vc.facingMode={ideal:facing};
     stream = await navigator.mediaDevices.getUserMedia({ video:vc, audio:false });
@@ -488,17 +486,18 @@ document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState==='hidden'){
     camWasOn = !!stream;
     if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; track=null; }
+    stopGeo();          // GPS ikut mati pas app di background -> hemat baterai
   } else if(document.visibilityState==='visible' && camWasOn){
     // jangan restart kalau user belum pernah mulai, atau lagi milih logo (file picker juga bikin hidden)
     startCam();
   }
 });
-// jaga-jaga: kalau track mati sendiri (kamera direbut app lain), restart pas visible
+// jaga-jaga: kalau track mati sendiri (kamera direbut app lain), restart pas visible.
+// 5 detik (dulu 2) + langsung keluar kalau app di background -> hemat baterai.
 setInterval(()=>{
-  if(document.visibilityState==='visible' && stream && track && track.readyState==='ended'){
-    startCam();
-  }
-}, 2000);
+  if(document.visibilityState!=='visible') return;
+  if(stream && track && track.readyState==='ended') startCam();
+}, 5000);
 
 /* ---------- zoom & tap-to-focus (v2.0) ---------- */
 const focusRing=$('#focusRing'), zoomInd=$('#zoomInd');
@@ -614,7 +613,21 @@ async function detectLenses(){
   // lensa fisik dilakukan SISTEM lewat zoom — persis mekanisme kamera bawaan/WhatsApp.
   // Chip dibikin dari rentang zoom + faktor lensa asli hasil baca native. ----
   const caps = track && track.getCapabilities ? track.getCapabilities() : {};
-  const zc = caps && caps.zoom;
+  let zc = caps && caps.zoom;
+  // Sebagian WebView GA NGELAPORIN kemampuan zoom padahal sebenarnya nerima perintahnya.
+  // Coba paksa: kirim zoom 2x, lalu cek settings-nya beneran berubah.
+  if(!zc && track && track.applyConstraints && nativeCams && nativeCams.zoomMax>1){
+    try{
+      await track.applyConstraints({advanced:[{zoom:2}]});
+      const st = track.getSettings ? track.getSettings() : {};
+      if(st && typeof st.zoom==='number' && Math.abs(st.zoom-2)<0.25){
+        zc={ min:(nativeCams.zoomMin||1), max:nativeCams.zoomMax };
+        zoomMode='native'; minZoom=zc.min; maxZoom=zc.max;
+        lensDiag += '\n(zoom ternyata JALAN walau ga dilaporkan WebView)';
+      }
+      await track.applyConstraints({advanced:[{zoom:1}]});
+    }catch(e){}
+  }
   lensDiag += '\n\nZoom lewat WebView: '+(zc ? (zc.min+' – '+zc.max+(zc.step?(' step '+zc.step):'')) : 'TIDAK didukung')
             + '\nMode zoom: '+zoomMode;
   if(list.length<2 && zc && zc.max>zc.min){
@@ -930,14 +943,27 @@ function openMapsAt(lat, lon){
 }
 mapsLink.onclick = (e)=>{ e.preventDefault(); if(shotPos) openMapsAt(shotPos.coords.latitude, shotPos.coords.longitude); };
 
-function startGeo(){
-  if(geoWatch!=null || !navigator.geolocation) return;
+// HEMAT BATERAI: dulu watchPosition high-accuracy NYALA TERUS = GPS chip aktif
+// sepanjang app kebuka (penyedot baterai terbesar). Sekarang ambil titik
+// SECUKUPNYA: sekali di awal, lalu tiap 25 detik, plus paksa segar pas jepret.
+let geoTimer=null, geoBusy=false;
+const GEO_EVERY=25000;
+function geoOnce(force){
+  if(!navigator.geolocation || geoBusy) return;
+  geoBusy=true;
   try{
-    geoWatch = navigator.geolocation.watchPosition(
-      p=>{ lastPos=p; maybeReverseGeocode(); },
-      e=>{}, { enableHighAccuracy:true, maximumAge:10000, timeout:20000 });
-  }catch(e){}
+    navigator.geolocation.getCurrentPosition(
+      p=>{ geoBusy=false; lastPos=p; maybeReverseGeocode(); },
+      e=>{ geoBusy=false; },
+      { enableHighAccuracy:true, maximumAge: force?0:15000, timeout:15000 });
+  }catch(e){ geoBusy=false; }
 }
+function startGeo(){
+  if(geoTimer!=null || !navigator.geolocation) return;
+  geoOnce(true);
+  geoTimer=setInterval(()=>{ if(document.visibilityState==='visible') geoOnce(false); }, GEO_EVERY);
+}
+function stopGeo(){ if(geoTimer!=null){ clearInterval(geoTimer); geoTimer=null; } geoBusy=false; }
 async function maybeReverseGeocode(){
   if(!lastPos || !navigator.onLine) return;       // alamat butuh sinyal; offline -> lewat
   const lat=lastPos.coords.latitude, lon=lastPos.coords.longitude;
@@ -1083,7 +1109,8 @@ $('#confirmNo').onclick =()=>_confirmDone(false);
 const galleryBtn=$('#galleryBtn'), galModal=$('#galModal'), galGrid=$('#galGrid'),
       galView=$('#galView'), galImg=$('#galImg'), galName=$('#galName'),
       galTitle=$('#galTitle'), galPos=$('#galPos'), galStage=$('#galStage');
-const GAL_MAX=1000;        // galeri sesi: 1000 thumbnail terakhir (thumb ~30KB -> max ~30MB)
+const GAL_MAX=1000;        // (mode lama/browser) batas thumbnail yang disimpan sendiri
+const GAL_DAYS=30;         // galeri nampilin foto 30 HARI TERAKHIR dari Galeri HP
 const LOG_KEEP_DAYS=30;    // log CSV: auto-hapus entri lebih tua dari 30 hari
 
 // SANITASI STORAGE (jalan tiap buka app):
@@ -1172,7 +1199,14 @@ async function obDel(id){ const d=await idb(); return new Promise((res,rej)=>{ c
 async function obAll(){ const d=await idb(); return new Promise((res,rej)=>{ const q=d.transaction('outbox','readonly').objectStore('outbox').getAll(); q.onsuccess=()=>res(q.result||[]); q.onerror=()=>rej(q.error); }); }
 async function idbTrim(n){ const d=await idb(); return new Promise((res,rej)=>{ const t=d.transaction('photos','readwrite'); const c=t.objectStore('photos').openCursor(); let left=n; c.onsuccess=()=>{ const cur=c.result; if(cur && left>0){ cur.delete(); left--; cur.continue(); } }; t.oncomplete=res; t.onerror=()=>rej(t.error); }); }
 
+// Galeri baca langsung dari Galeri HP (MediaStore) -> ga perlu nyimpen thumbnail sendiri
+function galLabel(){ return galFromMediaStore() ? ('Foto '+GAL_DAYS+' hari terakhir') : 'Foto sesi ini'; }
+function galFromMediaStore(){ return !!(savePort && window.AndroidSaver && window.AndroidSaver.listPhotos); }
+
 async function pushGallery(name, uri, fullBlob, thumbSrc){
+  // Mode MediaStore: foto udah ada di Pictures/SnapName -> cukup segarkan tombol thumbnail.
+  // Ini motong 1 encode + 1 tulis DB per foto (lebih cepat & lebih hemat baterai).
+  if(galFromMediaStore()){ refreshThumbBtn(); return; }
   try{
     // thumbnail dari kanvas preview kecil (bukan full-res) — save di background aman dari race
     const thumb=await canvasToBlob(thumbSrc||shot, 400, 0.6);
@@ -1191,7 +1225,23 @@ async function pushGallery(name, uri, fullBlob, thumbSrc){
 }
 
 let thumbUrl=null;
+function thumbSrcFor(uri, px){
+  return 'http://127.0.0.1:'+savePort.p+'/thumb?tk='+savePort.t+'&px='+(px||300)+'&uri='+encodeURIComponent(uri);
+}
 async function refreshThumbBtn(rec, cnt){
+  if(galFromMediaStore()){
+    try{
+      const n=window.AndroidSaver.countPhotos(GAL_DAYS);
+      const l=JSON.parse(window.AndroidSaver.listPhotos(0,1,GAL_DAYS)||'[]');
+      if(thumbUrl){ URL.revokeObjectURL(thumbUrl); thumbUrl=null; }
+      if(n && l.length){
+        galleryBtn.style.backgroundImage='url('+thumbSrcFor(l[0].uri,160)+')';
+        galleryBtn.classList.remove('empty');
+        galleryBtn.innerHTML='<span class="cnt">'+n+'</span>';
+      } else { galleryBtn.style.backgroundImage=''; galleryBtn.classList.add('empty'); galleryBtn.innerHTML=''; }
+    }catch(e){}
+    return;
+  }
   try{
     if(cnt===undefined) cnt=await idbCount();
     if(!rec && cnt) rec=await idbLast();   // cuma 1 record terakhir, bukan semua
@@ -1211,10 +1261,10 @@ const GRID_PAGE=90;        // render bertahap: 1000 sel sekaligus bikin galeri b
 let gridShown=0;
 function renderGrid(){
   gridUrls.forEach(u=>URL.revokeObjectURL(u)); gridUrls=[];
-  galTitle.textContent='Foto sesi ini ('+(galTotal||galRecs.length)+')';
+  galTitle.textContent=galLabel()+' ('+(galTotal||galRecs.length)+')';
   galGrid.innerHTML=''; gridShown=0;
   if(!galRecs.length){
-    galGrid.innerHTML='<div id="galEmpty">Belum ada foto.<br>Foto tetap aman di Galeri HP (Pictures/SnapName).</div>';
+    galGrid.innerHTML='<div id="galEmpty">Belum ada foto.<br>Foto tersimpan di Galeri HP (Pictures/SnapName).</div>';
     updateSelUI(); return;
   }
   appendGridPage();
@@ -1234,7 +1284,10 @@ function appendGridPage(){
       hd.textContent=(key===todayKey?'Hari ini · ':'')+d.getDate()+' '+BULAN[d.getMonth()]+' '+d.getFullYear();
       galGrid.appendChild(hd);
     }
-    const url=URL.createObjectURL(g.thumb); gridUrls.push(url);
+    let url;
+    if(g.thumb){ url=URL.createObjectURL(g.thumb); gridUrls.push(url); }
+    else url=thumbSrcFor(g.uri, 300);      // thumbnail dari cache MediaStore
+    if(!g.id) g.id=g.uri;                  // mode MediaStore: uri jadi identitas
     const cell=document.createElement('div'); cell.className='galCell';
     const im=document.createElement('img'); im.src=url; im.loading='lazy';
     const sp=document.createElement('span'); sp.textContent=g.name;
@@ -1280,7 +1333,7 @@ function exitSelMode(){ closeModal(selSilentExit); }
 function updateSelUI(){
   galGrid.classList.toggle('selmode', selMode);
   const b=$('#galSel');
-  if(!selMode){ b.textContent='Pilih'; galTitle.textContent='Foto sesi ini ('+(galTotal||galRecs.length)+')'; }
+  if(!selMode){ b.textContent='Pilih'; galTitle.textContent=galLabel()+' ('+(galTotal||galRecs.length)+')'; }
   else { b.textContent = selIds.size ? ('🗑 Hapus '+selIds.size) : 'Batal';
          galTitle.textContent='Pilih foto'; }
 }
@@ -1292,7 +1345,7 @@ $('#galSel').onclick=async ()=>{
   for(const r of galRecs){
     if(!ids.has(r.id)) continue;
     try{ if(window.AndroidSaver && window.AndroidSaver.deletePhoto) window.AndroidSaver.deletePhoto(r.uri||''); }catch(e){}
-    try{ await idbDel(r.id); }catch(e){}
+    if(!galFromMediaStore()){ try{ await idbDel(r.id); }catch(e){} }
   }
   galRecs=galRecs.filter(g=>!ids.has(g.id));
   galTotal=Math.max(0, galTotal-ids.size);
@@ -1324,15 +1377,21 @@ async function openGallery(){
   selMode=false; selIds.clear();
   galRecs=[]; galTotal=0;
   galGrid.innerHTML=''; gridShown=0;
-  galTitle.textContent='Foto sesi ini…';
+  galTitle.textContent=galLabel()+'…';
   galModal.classList.add('open');
   pushModal(closeGallery);
   try{
-    galTotal=await idbCount();
-    galRecs=await idbPage(0, GRID_PAGE);   // cuma 1 halaman, bukan semua
+    if(galFromMediaStore()){
+      // sumber = Galeri HP (30 hari terakhir): ga ada batas jumlah, selalu sinkron
+      galTotal=window.AndroidSaver.countPhotos(GAL_DAYS);
+      galRecs=JSON.parse(window.AndroidSaver.listPhotos(0, GRID_PAGE, GAL_DAYS)||'[]');
+    } else {
+      galTotal=await idbCount();
+      galRecs=await idbPage(0, GRID_PAGE);   // cuma 1 halaman, bukan semua
+    }
   }catch(e){}
   renderGrid();
-  syncMissing();                            // cek file kehapus: async, ga nahan UI
+  if(!galFromMediaStore()) syncMissing();    // mode lama: cek file kehapus
 }
 
 // Sinkron sama Galeri HP — cuma buat foto yang KELIHATAN, dicicil biar ga nge-blok.
@@ -1380,7 +1439,7 @@ async function delCurrent(){
   const g=galRecs[viewIdx];
   if(!(await customConfirm('Hapus "'+g.name+'"? Foto ini hilang dari HP juga.'))) return;
   try{ if(window.AndroidSaver && window.AndroidSaver.deletePhoto) window.AndroidSaver.deletePhoto(g.uri||''); }catch(e){}
-  try{ await idbDel(g.id); }catch(e){}
+  if(!galFromMediaStore()){ try{ await idbDel(g.id); }catch(e){} }
   galRecs.splice(viewIdx,1);
   galTotal=Math.max(0, galTotal-1);
   await refreshThumbBtn();
@@ -1409,7 +1468,9 @@ galGrid.addEventListener('scroll', async ()=>{
   if(galRecs.length>=galTotal) return;
   loadingPage=true;
   try{
-    const more=await idbPage(galRecs.length, GRID_PAGE);   // halaman berikutnya dari DB
+    const more = galFromMediaStore()
+      ? JSON.parse(window.AndroidSaver.listPhotos(galRecs.length, GRID_PAGE, GAL_DAYS)||'[]')
+      : await idbPage(galRecs.length, GRID_PAGE);          // halaman berikutnya
     if(more.length){ galRecs=galRecs.concat(more); appendGridPage(); }
   }catch(e){}
   loadingPage=false;
@@ -1447,6 +1508,7 @@ $('#shutter').onclick = ()=>{
   const w=video.videoWidth, h=video.videoHeight;
   if(!w){ showToast('Kamera belum siap'); return; }
   shotPos = lastPos;   // kunci titik GPS saat jepret (buat stempel/EXIF/Maps)
+  if(stampMode==='gps' || exifOn) geoOnce(false);   // segarkan buat foto berikutnya
   shot.width=w; shot.height=h;
   const ctx=shot.getContext('2d');
   if(zoomMode==='digital' && curZoom>1){
@@ -1681,7 +1743,8 @@ async function checkResources(){
   }catch(e){}
 }
 checkResources();
-setInterval(checkResources, 60000);
+// cek storage/baterai tiap 5 menit (dulu 1 menit) & skip kalau app di background
+setInterval(()=>{ if(document.visibilityState==='visible') checkResources(); }, 300000);
 
 /* service worker for offline / installable */
 if('serviceWorker' in navigator){

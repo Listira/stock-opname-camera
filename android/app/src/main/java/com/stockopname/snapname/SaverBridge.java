@@ -291,6 +291,20 @@ public class SaverBridge {
                             java.net.URLDecoder.decode(kv.substring(eq + 1), "UTF-8"));
                 }
             }
+            // GET /thumb?tk&uri&px -> thumbnail dari cache MediaStore (grid galeri)
+            if (req.startsWith("GET") && path.startsWith("/thumb") && token.equals(q.get("tk"))) {
+                int px = 300;
+                try { if (q.get("px") != null) px = Integer.parseInt(q.get("px")); } catch (Exception ignored) {}
+                byte[] img = thumbBytes(q.get("uri"), px);
+                if (img == null) { respond(out, 404, "{}", "application/json"); }
+                else {
+                    String h = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\n"
+                            + "Content-Type: image/jpeg\r\nCache-Control: max-age=86400\r\n"
+                            + "Content-Length: " + img.length + "\r\nConnection: close\r\n\r\n";
+                    out.write(h.getBytes("UTF-8")); out.write(img); out.flush();
+                }
+                s.close(); return;
+            }
             // GET /photo?tk&uri -> stream foto asli dari Pictures (buat viewer galeri, tanpa dobel simpan)
             if (req.startsWith("GET") && path.startsWith("/photo") && token.equals(q.get("tk"))) {
                 byte[] img = readUri(q.get("uri"));
@@ -428,6 +442,95 @@ public class SaverBridge {
             }
         } catch (Exception ignored) {}
         return fallback == null ? "" : fallback;
+    }
+
+    /**
+     * Daftar foto langsung dari GALERI HP (MediaStore, folder Pictures/SnapName).
+     * Ini bikin galeri in-app ga perlu nyimpen thumbnail sendiri sama sekali:
+     * hemat storage, hemat baterai (I/O tiap save berkurang), dan otomatis
+     * sinkron kalau foto dihapus dari luar app.
+     */
+    @JavascriptInterface
+    public String listPhotos(int offset, int limit, int days) {
+        StringBuilder sb = new StringBuilder("[");
+        android.database.Cursor c = null;
+        try {
+            String[] proj = { MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME,
+                              MediaStore.Images.Media.DATE_ADDED };
+            String sel; String[] args;
+            long cut = days > 0 ? (System.currentTimeMillis() / 1000L - (long) days * 86400L) : 0L;
+            if (Build.VERSION.SDK_INT >= 29) {
+                sel = MediaStore.Images.Media.RELATIVE_PATH + " LIKE ?";
+                args = new String[]{ "%" + Environment.DIRECTORY_PICTURES + "/SnapName%" };
+            } else {
+                sel = MediaStore.Images.Media.DATA + " LIKE ?";
+                args = new String[]{ "%/" + Environment.DIRECTORY_PICTURES + "/SnapName%" };
+            }
+            if (cut > 0) { sel += " AND " + MediaStore.Images.Media.DATE_ADDED + ">=?";
+                           args = new String[]{ args[0], String.valueOf(cut) }; }
+            c = ctx.getContentResolver().query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    proj, sel, args, MediaStore.Images.Media.DATE_ADDED + " DESC");
+            if (c != null && c.moveToPosition(offset)) {
+                int n = 0;
+                do {
+                    long id = c.getLong(0);
+                    String nm = c.getString(1);
+                    long da = c.getLong(2);
+                    Uri u = android.content.ContentUris.withAppendedId(
+                            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id);
+                    if (n > 0) sb.append(',');
+                    sb.append("{\"uri\":\"").append(u.toString())
+                      .append("\",\"name\":\"").append(nm == null ? "" : nm.replace("\\", "\\\\").replace("\"", "\\\""))
+                      .append("\",\"time\":").append(da * 1000L).append('}');
+                    n++;
+                } while (n < limit && c.moveToNext());
+            }
+        } catch (Exception e) { /* balikin apa adanya */ }
+        finally { if (c != null) try { c.close(); } catch (Exception ignored) {} }
+        return sb.append(']').toString();
+    }
+
+    /** Jumlah foto di folder SnapName (opsional dibatasi N hari terakhir). */
+    @JavascriptInterface
+    public int countPhotos(int days) {
+        android.database.Cursor c = null;
+        try {
+            String sel; String[] args;
+            long cut = days > 0 ? (System.currentTimeMillis() / 1000L - (long) days * 86400L) : 0L;
+            if (Build.VERSION.SDK_INT >= 29) {
+                sel = MediaStore.Images.Media.RELATIVE_PATH + " LIKE ?";
+                args = new String[]{ "%" + Environment.DIRECTORY_PICTURES + "/SnapName%" };
+            } else {
+                sel = MediaStore.Images.Media.DATA + " LIKE ?";
+                args = new String[]{ "%/" + Environment.DIRECTORY_PICTURES + "/SnapName%" };
+            }
+            if (cut > 0) { sel += " AND " + MediaStore.Images.Media.DATE_ADDED + ">=?";
+                           args = new String[]{ args[0], String.valueOf(cut) }; }
+            c = ctx.getContentResolver().query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    new String[]{ MediaStore.Images.Media._ID }, sel, args, null);
+            return c == null ? 0 : c.getCount();
+        } catch (Exception e) { return 0; }
+        finally { if (c != null) try { c.close(); } catch (Exception ignored) {} }
+    }
+
+    /** Thumbnail kecil dari MediaStore (pakai cache thumbnail bawaan Android = cepat & hemat). */
+    private byte[] thumbBytes(String uriStr, int px) {
+        try {
+            Uri u = Uri.parse(uriStr);
+            android.graphics.Bitmap bm;
+            if (Build.VERSION.SDK_INT >= 29) {
+                bm = ctx.getContentResolver().loadThumbnail(u, new android.util.Size(px, px), null);
+            } else {
+                long id = android.content.ContentUris.parseId(u);
+                bm = MediaStore.Images.Thumbnails.getThumbnail(ctx.getContentResolver(), id,
+                        MediaStore.Images.Thumbnails.MINI_KIND, null);
+            }
+            if (bm == null) return null;
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            bm.compress(android.graphics.Bitmap.CompressFormat.JPEG, 72, bo);
+            bm.recycle();
+            return bo.toByteArray();
+        } catch (Exception e) { return null; }
     }
 
     private byte[] readUri(String u) {
