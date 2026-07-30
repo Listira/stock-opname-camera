@@ -20,8 +20,11 @@
 
   /* ---- Camera stage ---- */
   #stage{position:relative;flex:1;background:#000;overflow:hidden;touch-action:none}
-  /* mode kamera native: preview digambar Android di belakang -> halaman transparan */
-  body.nativecam, body.nativecam #stage{background:transparent}
+  /* mode kamera native: preview digambar Android di BELAKANG halaman.
+     SEMUA lapisan latar harus transparan — kalau html/body/#app/#stage masih
+     punya warna, preview kameranya ketutup dan layar keliatan hitam. */
+  html.nativecam, body.nativecam,
+  body.nativecam #app, body.nativecam #stage{background:transparent !important}
   body.nativecam #video{display:none}
   /* lapisan penangkap cubit/tap — dipakai di dua mode (preview web & native) */
   #gesture{position:absolute;inset:0;z-index:1}
@@ -313,6 +316,12 @@
         EXIF = lokasi nempel di file foto (hati-hati kalau share foto mentah ke luar).</div>
 
       <hr class="setDiv">
+      <div class="setHead">🎥 Mesin Kamera</div>
+      <label class="wmRow"><input type="checkbox" id="nativeCamCb" checked> Pakai kamera native (zoom optik &amp; lensa tele)</label>
+      <div class="setNote">Matikan kalau layar kamera hitam / bermasalah — app balik ke mesin lama
+        (zoom digital, tanpa lensa tele). Ganti setelan ini otomatis mulai ulang kamera.</div>
+
+      <hr class="setDiv">
       <div class="setHead">📷 Resolusi Kamera</div>
       <label class="wmRow" style="display:block">Resolusi foto:
         <select id="resSel" class="setSelect">
@@ -368,7 +377,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v5.0</div>
+    <div id="startCredit">By Jova/Listira<br>v5.01</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -443,11 +452,13 @@ if(DEMO){
 /* ---------- KAMERA NATIVE (v5.0) ----------
    Preview digambar Android di belakang halaman ini (WebView-nya transparan).
    Zoom di sini = zoom OPTIK: sistem yang nuker lensa ultrawide/tele sendiri. */
-const NC = (window.NativeCam && window.NativeCam.start) ? window.NativeCam : null;
+const NC = (window.NativeCam && window.NativeCam.start && localStorage.getItem('so_nativecam')!=='0')
+           ? window.NativeCam : null;
 let nativeCam=false, ncShot=null;
 window.__camReady=(ok, zmin, zmax)=>{
   nativeCam=!!ok;
   document.body.classList.toggle('nativecam', nativeCam);
+  document.documentElement.classList.toggle('nativecam', nativeCam);
   $('#start').style.display = ok ? 'none' : 'flex';
   if(!ok){ startCam(); return; }                 // native gagal -> pakai jalur lama
   zoomMode='native'; minZoom=zmin||1; maxZoom=zmax||1; curZoom=1;
@@ -1000,6 +1011,18 @@ exifOnCb.addEventListener('change', ()=>{
   showToast('Koordinat ke file (EXIF): '+(exifOn?'ON':'OFF'));
 });
 reflectGps();
+
+// Saklar mesin kamera (native vs lama) — jaring pengaman kalau preview bermasalah
+const ncCb=$('#nativeCamCb');
+if(ncCb){
+  ncCb.checked = localStorage.getItem('so_nativecam')!=='0';
+  if(!window.NativeCam){ ncCb.disabled=true; ncCb.parentElement.style.opacity=.5; }
+  ncCb.addEventListener('change', ()=>{
+    localStorage.setItem('so_nativecam', ncCb.checked?'1':'0');
+    showToast('Mesin kamera diganti — memuat ulang…');
+    setTimeout(()=>location.reload(), 600);
+  });
+}
 
 // Resolusi kamera
 const resSel = $('#resSel');
