@@ -20,6 +20,11 @@
 
   /* ---- Camera stage ---- */
   #stage{position:relative;flex:1;background:#000;overflow:hidden;touch-action:none}
+  /* mode kamera native: preview digambar Android di belakang -> halaman transparan */
+  body.nativecam, body.nativecam #stage{background:transparent}
+  body.nativecam #video{display:none}
+  /* lapisan penangkap cubit/tap — dipakai di dua mode (preview web & native) */
+  #gesture{position:absolute;inset:0;z-index:1}
   #video,#shot{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
   #shot{display:none}
 
@@ -213,6 +218,7 @@
     <video id="video" autoplay playsinline muted></video>
     <canvas id="shot" hidden></canvas>
     <div id="focusRing"></div>
+    <div id="gesture"></div>
     <div id="zoomInd"></div>
     <div id="lensRow"></div>
     <div id="flash"></div>
@@ -362,7 +368,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v4.21</div>
+    <div id="startCredit">By Jova/Listira<br>v5.0</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -434,9 +440,64 @@ if(DEMO){
   demoNote.textContent = '🔒 Versi demo: batas '+DAILY_LIMIT+' foto/hari. Versi penuh (APK) tanpa batas.';
 }
 
+/* ---------- KAMERA NATIVE (v5.0) ----------
+   Preview digambar Android di belakang halaman ini (WebView-nya transparan).
+   Zoom di sini = zoom OPTIK: sistem yang nuker lensa ultrawide/tele sendiri. */
+const NC = (window.NativeCam && window.NativeCam.start) ? window.NativeCam : null;
+let nativeCam=false, ncShot=null;
+window.__camReady=(ok, zmin, zmax)=>{
+  nativeCam=!!ok;
+  document.body.classList.toggle('nativecam', nativeCam);
+  $('#start').style.display = ok ? 'none' : 'flex';
+  if(!ok){ startCam(); return; }                 // native gagal -> pakai jalur lama
+  zoomMode='native'; minZoom=zmin||1; maxZoom=zmax||1; curZoom=1;
+  $('#torchBtn').style.display = (NC.hasTorch && NC.hasTorch()) ? 'flex' : 'none';
+  buildNativeLenses(minZoom, maxZoom);
+  if(stampMode==='gps' || exifOn) startGeo();
+};
+window.__camShot=(id, err)=>{ const cb=ncShot; ncShot=null; if(cb) cb(id, err); };
+
+function nativeCapture(){
+  return new Promise((res,rej)=>{
+    if(!NC || !savePort) return rej(new Error('kamera native ga aktif'));
+    const t=setTimeout(()=>{ ncShot=null; rej(new Error('jepretan timeout')); }, 8000);
+    ncShot=(id,err)=>{
+      clearTimeout(t);
+      if(!id) return rej(new Error(err||'gagal jepret'));
+      // WAJIB lewat fetch->blob: kalau <img> langsung nunjuk ke port lokal, kanvasnya
+      // dianggap "ternoda" (beda origin) dan foto GA BISA di-encode sama sekali.
+      fetch('http://127.0.0.1:'+savePort.p+'/shot?tk='+savePort.t+'&id='+encodeURIComponent(id))
+        .then(r=>{ if(!r.ok) throw new Error('hasil jepretan ga ketemu'); return r.blob(); })
+        .then(bl=>{
+          if(window.createImageBitmap) return createImageBitmap(bl);
+          return new Promise((ok,no)=>{ const u=URL.createObjectURL(bl); const im=new Image();
+            im.onload=()=>{ URL.revokeObjectURL(u); ok(im); };
+            im.onerror=()=>{ URL.revokeObjectURL(u); no(new Error('gagal baca hasil jepretan')); };
+            im.src=u; });
+        })
+        .then(res).catch(rej);
+    };
+    NC.capture();
+  });
+}
+// chip lensa dari rentang zoom OPTIK yang dilaporkan kamera native
+function buildNativeLenses(mn, mx){
+  const zl=[], add=f=>{ f=Math.min(mx,Math.max(mn,f));
+    if(!zl.some(x=>Math.abs(x.factor-f)<0.05)) zl.push({id:null,factor:+f.toFixed(2),label:fmtFactor(f),nativeZoom:true}); };
+  if(mn<0.85) add(mn);
+  add(1);
+  [2,3,5,10].forEach(f=>{ if(mx>=f) add(f); });
+  if(zl.length>1){
+    lenses=zl; curLens=Math.max(0, zl.findIndex(l=>Math.abs(l.factor-1)<0.01));
+    renderLensChips(); $('#lensRow').classList.toggle('show', !NC.isBack || NC.isBack());
+  } else { lenses=[{id:null,factor:1,label:'1x'}]; curLens=0; $('#lensRow').classList.remove('show'); }
+  lensReady=true;
+}
+
 /* ---------- camera ---------- */
 async function startCam(deviceId){
   $('#startErr').textContent='';
+  if(NC && savePort){ NC.start(); return; }      // jalur native diutamakan
   // Penyebab #1 kamera ga muncul: halaman dibuka dari file:// atau http biasa.
   // Chrome cuma kasih akses kamera di "secure context" (https / localhost).
   if(!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
@@ -484,7 +545,8 @@ function checkTorch(){
 let camWasOn=false;
 document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState==='hidden'){
-    camWasOn = !!stream;
+    camWasOn = nativeCam || !!stream;
+    if(nativeCam){ try{ NC.stop(); }catch(e){} nativeCam=false; }
     if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; track=null; }
     stopGeo();          // GPS ikut mati pas app di background -> hemat baterai
   } else if(document.visibilityState==='visible' && camWasOn){
@@ -496,6 +558,7 @@ document.addEventListener('visibilitychange', ()=>{
 // 5 detik (dulu 2) + langsung keluar kalau app di background -> hemat baterai.
 setInterval(()=>{
   if(document.visibilityState!=='visible') return;
+  if(nativeCam) return;                       // kamera native diurus CameraX (lifecycle-aware)
   if(stream && track && track.readyState==='ended') startCam();
 }, 5000);
 
@@ -548,7 +611,7 @@ let lenses=[{id:null,factor:1,label:'1x'}], curLens=0, lensReady=false;
 // mode "1 kamera logis": sistem yang pindah lensa lewat zoom native -> curZoom = zoom ABSOLUT
 function nativeLensMode(){ return lenses.length>1 && !!lenses[0].nativeZoom; }
 function effZoom(){
-  if(nativeLensMode()) return curZoom;
+  if(nativeCam || nativeLensMode()) return curZoom;
   return (lenses[curLens]?lenses[curLens].factor:1) * curZoom;
 }
 
@@ -686,7 +749,7 @@ function renderLensChips(){
 let switching=false;
 async function useLens(idx, zoomOnLens){
   if(switching || idx<0 || idx>=lenses.length) return;
-  if(nativeLensMode()){ await setZoomEff(lenses[idx].factor); return; }  // sistem yang pindah lensa
+  if(nativeCam || nativeLensMode()){ await setZoomEff(lenses[idx].factor); return; }  // sistem yang pindah lensa
   if(idx===curLens){ setZoom(zoomOnLens||1); return; }
   switching=true;
   const prev=curLens;
@@ -702,7 +765,17 @@ async function useLens(idx, zoomOnLens){
 
 // zoom EFEKTIF (dipakai gesture cubit): pilih lensa terbaik + sisanya digital
 async function setZoomEff(eff){
-  // MODE 1 KAMERA LOGIS: zoom native = absolut, sistem yang tukar lensa fisik
+  // KAMERA NATIVE: zoom OPTIK, sistem yang nuker lensa ultrawide/tele sendiri
+  if(nativeCam){
+    eff=Math.min(maxZoom, Math.max(minZoom, eff));
+    curZoom=eff;
+    try{ NC.setZoom(eff); }catch(e){}
+    let b=0; for(let i=0;i<lenses.length;i++) if(eff >= lenses[i].factor*0.97) b=i;
+    if(b!==curLens){ curLens=b; renderLensChips(); }
+    showZoom();
+    return;
+  }
+  // MODE 1 KAMERA LOGIS (jalur web): zoom native = absolut
   if(nativeLensMode()){
     eff=Math.min(maxZoom, Math.max(minZoom, eff));
     curZoom=eff;
@@ -723,15 +796,16 @@ async function setZoomEff(eff){
 }
 
 async function focusAt(clientX, clientY){
-  const r = video.getBoundingClientRect();
+  const r = (document.querySelector('#gesture')||video).getBoundingClientRect();
   // ring di titik tap (visual feedback selalu muncul)
   focusRing.style.left = (clientX - r.left) + 'px';
   focusRing.style.top  = (clientY - r.top) + 'px';
   focusRing.classList.remove('show'); void focusRing.offsetWidth; focusRing.classList.add('show');
-  // coba fokus beneran kalau HP dukung (titik 0..1 + single-shot)
-  if(!track || !track.applyConstraints) return;
   const x = Math.min(1, Math.max(0, (clientX - r.left)/r.width));
   const y = Math.min(1, Math.max(0, (clientY - r.top)/r.height));
+  if(nativeCam){ try{ NC.focusAt(x,y); }catch(e){} return; }   // fokus lewat kamera native
+  // coba fokus beneran kalau HP dukung (titik 0..1 + single-shot)
+  if(!track || !track.applyConstraints) return;
   const tries = [
     {advanced:[{focusMode:'single-shot', pointsOfInterest:[{x,y}]}]},
     {advanced:[{pointsOfInterest:[{x,y}]}]},
@@ -742,15 +816,16 @@ async function focusAt(clientX, clientY){
 
 // Gesture di preview hidup: cubit (pinch) = zoom, satu tap = fokus.
 (function bindGestures(){
+  const gest = document.querySelector('#gesture');
   const pts = new Map();
   let pinchStartDist=0, pinchStartZoom=1, pinching=false, tap=null;
   const dist=()=>{ const a=[...pts.values()]; return Math.hypot(a[0].x-a[1].x, a[0].y-a[1].y); };
-  video.addEventListener('pointerdown', e=>{
+  gest.addEventListener('pointerdown', e=>{
     pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
     if(pts.size===1){ tap={x:e.clientX,y:e.clientY,t:Date.now(),moved:false}; }
     else if(pts.size===2){ pinching=true; tap=null; pinchStartDist=dist()||1; pinchStartZoom=effZoom(); }
   });
-  video.addEventListener('pointermove', e=>{
+  gest.addEventListener('pointermove', e=>{
     if(!pts.has(e.pointerId)) return;
     const p=pts.get(e.pointerId);
     if(tap && pts.size===1 && Math.hypot(e.clientX-tap.x, e.clientY-tap.y)>12) tap.moved=true;
@@ -765,8 +840,8 @@ async function focusAt(clientX, clientY){
       tap=null;
     }
   }
-  video.addEventListener('pointerup', up);
-  video.addEventListener('pointercancel', e=>{ pts.delete(e.pointerId); if(pts.size<2) pinching=false; tap=null; });
+  gest.addEventListener('pointerup', up);
+  gest.addEventListener('pointercancel', e=>{ pts.delete(e.pointerId); if(pts.size<2) pinching=false; tap=null; });
 })();
 
 /* ---------- watermark logo (v2.1) ---------- */
@@ -1496,6 +1571,8 @@ $('#galDel').onclick  =delCurrent;
 refreshThumbBtn();
 
 $('#flipBtn').onclick = ()=>{
+  if(nativeCam){ torchOn=false; $('#torchBtn').classList.remove('on');
+                 curZoom=1; lensReady=false; try{ NC.flip(); }catch(e){} return; }
   facing = facing==='environment'?'user':'environment';
   torchOn=false; $('#torchBtn').classList.remove('on');
   curZoom=1; video.style.transform='';
@@ -1504,6 +1581,8 @@ $('#flipBtn').onclick = ()=>{
   $('#lensRow').classList.toggle('show', lenses.length>1 && facing==='environment');
 };
 $('#torchBtn').onclick = async ()=>{
+  if(nativeCam){ torchOn=!torchOn; try{ NC.torch(torchOn); }catch(e){}
+                 $('#torchBtn').classList.toggle('on',torchOn); return; }
   if(!track) return;
   torchOn=!torchOn;
   try{ await track.applyConstraints({advanced:[{torch:torchOn}]});
@@ -1513,11 +1592,12 @@ $('#torchBtn').onclick = async ()=>{
 
 /* ---------- capture ---------- */
 $('#shutter').onclick = ()=>{
-  if(!stream) return;
+  if(!nativeCam && !stream) return;
   if(DEMO && count >= DAILY_LIMIT){
     showToast('🔒 Demo: batas '+DAILY_LIMIT+' foto/hari tercapai. Reset besok.');
     return;
   }
+  if(nativeCam){ nativeShutter(); return; }         // jalur kamera native
   const w=video.videoWidth, h=video.videoHeight;
   if(!w){ showToast('Kamera belum siap'); return; }
   shotPos = lastPos;   // kunci titik GPS saat jepret (buat stempel/EXIF/Maps)
@@ -1554,6 +1634,38 @@ $('#shutter').onclick = ()=>{
     },'image/jpeg',0.85);  // 0.85: encode+tulis lebih cepat, ~30% lebih kecil, visual setara
   });
 };
+
+// Jepret lewat kamera native: dapat JPEG kualitas kamera asli, lalu stempel &
+// watermark tetap digambar di sini (logikanya sudah matang, ga usah ditulis ulang).
+async function nativeShutter(){
+  shotPos = lastPos;
+  if(stampMode==='gps' || exifOn) geoOnce(true);
+  flash.classList.remove('fire'); void flash.offsetWidth; flash.classList.add('fire');
+  // buka sheet SEKARANG (dalam gesture tap) -> keyboard HP naik sendiri
+  openSheet();
+  preview.style.backgroundImage='';
+  let img;
+  try{ img=await nativeCapture(); }
+  catch(e){ closeSheet(); showToast('Gagal jepret: '+e.message); return; }
+  const w=img.width||img.naturalWidth, h=img.height||img.naturalHeight;
+  shot.width=w; shot.height=h;
+  const ctx=shot.getContext('2d');
+  ctx.drawImage(img,0,0,w,h);          // zoom sudah OPTIK di kamera, ga perlu crop
+  drawStamp(ctx, w, h);
+  drawWatermark(ctx, w, h);
+  const pv=document.createElement('canvas');
+  const pw=Math.min(480,w); pv.width=pw; pv.height=Math.max(1,Math.round(h*pw/w));
+  pv.getContext('2d').drawImage(shot,0,0,pv.width,pv.height);
+  preview.style.backgroundImage=`url(${pv.toDataURL('image/jpeg',0.7)})`;
+  lastPvCanvas=pv;
+  blobPromise = new Promise(res=>{
+    shot.toBlob(b=>{
+      if(lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
+      lastBlob=b; lastBlobUrl=b?URL.createObjectURL(b):null;
+      res(b);
+    },'image/jpeg',0.9);
+  });
+}
 
 /* ---------- name sheet ---------- */
 function suggestName(){

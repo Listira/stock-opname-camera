@@ -22,10 +22,19 @@ import androidx.webkit.WebViewAssetLoader;
 import java.util.ArrayList;
 import java.util.List;
 
-public class MainActivity extends Activity {
+public class MainActivity extends Activity implements androidx.lifecycle.LifecycleOwner {
+
+    // CameraX butuh LifecycleOwner; kita sediakan sendiri biar ga perlu AppCompat
+    private final androidx.lifecycle.LifecycleRegistry lifecycle =
+            new androidx.lifecycle.LifecycleRegistry(this);
+
+    @Override
+    public androidx.lifecycle.Lifecycle getLifecycle() { return lifecycle; }
 
     private WebView web;
     private SaverBridge bridge;
+    private CamBridge cam;
+    private androidx.camera.view.PreviewView preview;
     private PermissionRequest pendingReq;
     private ValueCallback<Uri[]> filePathCallback;   // buat <input type=file> (pilih logo)
     private static final int REQ_PERMS = 1001;
@@ -35,8 +44,19 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        lifecycle.setCurrentState(androidx.lifecycle.Lifecycle.State.CREATED);
+
+        // Preview kamera native di LAPIS BAWAH, WebView (UI) transparan di atasnya
+        android.widget.FrameLayout root = new android.widget.FrameLayout(this);
+        preview = new androidx.camera.view.PreviewView(this);
+        preview.setImplementationMode(androidx.camera.view.PreviewView.ImplementationMode.COMPATIBLE);
+        preview.setScaleType(androidx.camera.view.PreviewView.ScaleType.FILL_CENTER);
+        root.addView(preview, new android.widget.FrameLayout.LayoutParams(-1, -1));
+
         web = new WebView(this);
-        setContentView(web);
+        web.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        root.addView(web, new android.widget.FrameLayout.LayoutParams(-1, -1));
+        setContentView(root);
 
         // Serve bundled assets over a SECURE https origin so getUserMedia (camera) works offline.
         final WebViewAssetLoader loader = new WebViewAssetLoader.Builder()
@@ -57,6 +77,12 @@ public class MainActivity extends Activity {
         bridge.setWebView(web);   // buat callback hasil save async balik ke JS
         bridge.startPort();       // jalur save cepat: JPEG bytes mentah via localhost
         web.addJavascriptInterface(bridge, "AndroidSaver");
+
+        // Kamera native (CameraX) — zoom optik + pindah lensa otomatis
+        cam = new CamBridge(this, preview, this);
+        cam.setWebView(web);
+        bridge.setCam(cam);       // biar hasil jepretan bisa diambil lewat port lokal
+        web.addJavascriptInterface(cam, "NativeCam");
 
         web.setWebViewClient(new WebViewClient() {
             @Override
@@ -177,19 +203,34 @@ public class MainActivity extends Activity {
     // Tanpa ini WebView (timer/JS/media) bisa nge-hang setelah app di-background lama
     // lalu dibuka lagi dari Home/recent apps.
     @Override
+    protected void onStart() {
+        super.onStart();
+        lifecycle.setCurrentState(androidx.lifecycle.Lifecycle.State.STARTED);
+    }
+
+    @Override
     protected void onPause() {
         super.onPause();
         if (web != null) web.onPause();
+        lifecycle.setCurrentState(androidx.lifecycle.Lifecycle.State.STARTED);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         if (web != null) web.onResume();
+        lifecycle.setCurrentState(androidx.lifecycle.Lifecycle.State.RESUMED);
+    }
+
+    @Override
+    protected void onStop() {
+        lifecycle.setCurrentState(androidx.lifecycle.Lifecycle.State.CREATED);
+        super.onStop();
     }
 
     @Override
     protected void onDestroy() {
+        lifecycle.setCurrentState(androidx.lifecycle.Lifecycle.State.DESTROYED);
         if (bridge != null) bridge.stopPort();
         if (web != null) web.destroy();
         super.onDestroy();

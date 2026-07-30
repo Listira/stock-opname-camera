@@ -225,6 +225,9 @@ public class SaverBridge {
      * 127.0.0.1 -> zero base64, zero blok di JS thread, tulis file full di
      * thread server. Ini yang bikin save serasa instan (kaya kamera WA).
      * Amanin: bind loopback saja + token acak per sesi. */
+    private CamBridge cam;
+    void setCam(CamBridge c) { this.cam = c; }
+
     private java.net.ServerSocket srv;
     private int port = 0;
     private String token = "";
@@ -290,6 +293,18 @@ public class SaverBridge {
                     if (eq > 0) q.put(kv.substring(0, eq),
                             java.net.URLDecoder.decode(kv.substring(eq + 1), "UTF-8"));
                 }
+            }
+            // GET /shot?tk&id -> ambil JPEG hasil jepretan kamera native (sekali pakai)
+            if (req.startsWith("GET") && path.startsWith("/shot") && token.equals(q.get("tk"))) {
+                byte[] img = (cam != null) ? cam.takeShot(q.get("id")) : null;
+                if (img == null) { respond(out, 404, "{}", "application/json"); }
+                else {
+                    String h = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\n"
+                            + "Content-Type: image/jpeg\r\nContent-Length: " + img.length
+                            + "\r\nConnection: close\r\n\r\n";
+                    out.write(h.getBytes("UTF-8")); out.write(img); out.flush();
+                }
+                s.close(); return;
             }
             // GET /thumb?tk&uri&px -> thumbnail dari cache MediaStore (grid galeri)
             if (req.startsWith("GET") && path.startsWith("/thumb") && token.equals(q.get("tk"))) {
