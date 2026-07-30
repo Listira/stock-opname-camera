@@ -362,7 +362,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v4.2</div>
+    <div id="startCredit">By Jova/Listira<br>v4.21</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -512,7 +512,9 @@ function initCamControls(){
     video.style.transform='';
   } else {
     // fallback DIGITAL zoom (crop) -> jalan di SEMUA HP termasuk Redmi/MIUI
-    zoomMode='digital'; minZoom=1; maxZoom=5; curZoom=1;
+    // WebView ga ngasih zoom optik -> digital (crop). Batas dinaikin 5x -> 10x:
+    // di resolusi 2K/Maksimum, crop masih sisa banyak piksel jadi tetap kebaca.
+    zoomMode='digital'; minZoom=1; maxZoom=10; curZoom=1;
     video.style.transform='';
   }
   supportsFocusPoint = !!(caps && (caps.focusMode || ('pointsOfInterest' in caps)));
@@ -947,13 +949,19 @@ mapsLink.onclick = (e)=>{ e.preventDefault(); if(shotPos) openMapsAt(shotPos.coo
 // sepanjang app kebuka (penyedot baterai terbesar). Sekarang ambil titik
 // SECUKUPNYA: sekali di awal, lalu tiap 25 detik, plus paksa segar pas jepret.
 let geoTimer=null, geoBusy=false;
-const GEO_EVERY=25000;
+// Seberapa sering ambil titik GPS: kalau koordinat DICETAK di foto, harus lebih
+// segar (12 dtk); kalau cuma ditanam ke EXIF, 30 dtk sudah cukup & lebih hemat.
+function geoEvery(){ return stampMode==='gps' ? 12000 : 30000; }
 function geoOnce(force){
   if(!navigator.geolocation || geoBusy) return;
   geoBusy=true;
   try{
     navigator.geolocation.getCurrentPosition(
-      p=>{ geoBusy=false; lastPos=p; maybeReverseGeocode(); },
+      p=>{ geoBusy=false; lastPos=p; maybeReverseGeocode();
+           // fix baru nyampe selagi user ngetik nama -> EXIF & log pakai titik terbaru
+           if(sheet.classList.contains('open') && (stampMode==='gps'||exifOn)){
+             shotPos=p; mapsLink.classList.toggle('show', true);
+           } },
       e=>{ geoBusy=false; },
       { enableHighAccuracy:true, maximumAge: force?0:15000, timeout:15000 });
   }catch(e){ geoBusy=false; }
@@ -961,7 +969,12 @@ function geoOnce(force){
 function startGeo(){
   if(geoTimer!=null || !navigator.geolocation) return;
   geoOnce(true);
-  geoTimer=setInterval(()=>{ if(document.visibilityState==='visible') geoOnce(false); }, GEO_EVERY);
+  let lastEvery=geoEvery();
+  geoTimer=setInterval(()=>{
+    if(document.visibilityState!=='visible') return;
+    geoOnce(false);
+    if(geoEvery()!==lastEvery){ stopGeo(); startGeo(); }   // mode stempel ganti -> irama ikut
+  }, lastEvery);
 }
 function stopGeo(){ if(geoTimer!=null){ clearInterval(geoTimer); geoTimer=null; } geoBusy=false; }
 async function maybeReverseGeocode(){
@@ -1508,7 +1521,7 @@ $('#shutter').onclick = ()=>{
   const w=video.videoWidth, h=video.videoHeight;
   if(!w){ showToast('Kamera belum siap'); return; }
   shotPos = lastPos;   // kunci titik GPS saat jepret (buat stempel/EXIF/Maps)
-  if(stampMode==='gps' || exifOn) geoOnce(false);   // segarkan buat foto berikutnya
+  if(stampMode==='gps' || exifOn) geoOnce(true);    // fix segar: kekejar sebelum Simpan ditekan
   shot.width=w; shot.height=h;
   const ctx=shot.getContext('2d');
   if(zoomMode==='digital' && curZoom>1){
