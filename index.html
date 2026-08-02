@@ -167,6 +167,18 @@
   #wmPreview img{max-height:84px;max-width:90%}
   .wmRow{display:flex;align-items:center;gap:10px;font-size:14px;color:var(--txt);margin:10px 0}
   .wmRow input{width:18px;height:18px}
+  /* Pengaturan dikelompokkan jadi menu yang bisa dibuka-tutup */
+  .setGrp{border:1px solid var(--line);border-radius:12px;margin-bottom:8px;background:#0e1320aa;
+    overflow:hidden}
+  .setGrp summary{list-style:none;cursor:pointer;padding:13px 14px;font-size:14px;font-weight:700;
+    color:var(--txt);display:flex;align-items:center;justify-content:space-between;user-select:none}
+  .setGrp summary::-webkit-details-marker{display:none}
+  .setGrp summary::after{content:'▸';color:var(--muted);font-size:15px;transition:transform .15s}
+  .setGrp[open] summary::after{transform:rotate(90deg)}
+  .setGrp[open] summary{border-bottom:1px solid var(--line);background:#151b27}
+  .setGrp summary:active{background:#1b2233}
+  .setBody{padding:12px 14px 14px}
+  .setBody > .wmRow:first-child{margin-top:0}
   /* editor posisi & ukuran watermark */
   #wmEditor{display:none}
   #wmEditor.show{display:block}
@@ -251,7 +263,8 @@
     <div id="toast"></div>
 
     <div id="topbar">
-      <div style="display:flex;gap:8px;align-items:center">
+      <!-- pill sesi di atas, badge "lagi nyimpen" & peringatan menumpuk DI BAWAHNYA -->
+      <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start">
         <div class="pill">📸 Sesi: <b id="count">0</b><span id="limit"></span></div>
         <div id="savePendPill" class="pill" title="Foto lagi disimpan di belakang">💾 <b id="savePendN">0</b></div>
         <div id="warnPill" class="pill warn"></div>
@@ -327,7 +340,7 @@
     <div class="wmCard">
       <h3>⚙️ Pengaturan</h3>
 
-      <div class="setHead">📍 Stempel di Foto</div>
+      <details class="setGrp"><summary>📍 Stempel di Foto</summary><div class="setBody">
       <label class="wmRow" style="display:block">Mode stempel:
         <select id="stampModeSel" class="setSelect">
           <option value="off">Mati</option>
@@ -339,14 +352,14 @@
       <div class="setNote">Koordinat &amp; waktu jalan offline. Alamat &amp; peta cuma muncul kalau ada sinyal.
         EXIF = lokasi nempel di file foto (hati-hati kalau share foto mentah ke luar).</div>
 
-      <hr class="setDiv">
-      <div class="setHead">🎥 Mesin Kamera</div>
+      </div></details>
+      <details class="setGrp"><summary>🎥 Mesin Kamera</summary><div class="setBody">
       <label class="wmRow"><input type="checkbox" id="nativeCamCb" checked> Pakai kamera native (zoom optik &amp; lensa tele)</label>
       <div class="setNote">Matikan kalau layar kamera hitam / bermasalah — app balik ke mesin lama
         (zoom digital, tanpa lensa tele). Ganti setelan ini otomatis mulai ulang kamera.</div>
 
-      <hr class="setDiv">
-      <div class="setHead">📷 Resolusi Kamera</div>
+      </div></details>
+      <details class="setGrp"><summary>📷 Resolusi Kamera</summary><div class="setBody">
       <label class="wmRow" style="display:block">Resolusi foto:
         <select id="resSel" class="setSelect">
           <option value="720p">HD 720p (1280×720) — hemat storage</option>
@@ -357,8 +370,8 @@
       </label>
       <div class="setNote">Resolusi aktif setelah kamera direstart. Resolusi lebih tinggi = file lebih besar. Kamera HP ada batasnya — kalau diminta lebih tinggi dari kemampuan, otomatis pakai yang tertinggi yang bisa.</div>
 
-      <hr class="setDiv">
-      <div class="setHead">🏷️ Chip Cepat (1-tap di layar nama)</div>
+      </div></details>
+      <details class="setGrp"><summary>🏷️ Chip Cepat</summary><div class="setBody">
       <div class="setNote">Tombol cepat buat nambah teks ke nama (mis. kondisi aset). Bisa tambah/hapus sendiri.</div>
       <div id="chipEditor"></div>
       <div class="inrow" style="margin-top:8px">
@@ -367,8 +380,8 @@
         <button class="btn ghost" id="chipAdd" style="flex:0 0 84px">Tambah</button>
       </div>
 
-      <hr class="setDiv">
-      <div class="setHead">🏷️ Watermark Logo</div>
+      </div></details>
+      <details class="setGrp" id="grpWm"><summary>🏷️ Watermark Logo</summary><div class="setBody">
       <div id="wmPreview">Belum ada logo</div>
       <label class="wmRow"><input type="checkbox" id="wmRemoveBg" checked> Hapus background otomatis</label>
       <label class="wmRow"><input type="checkbox" id="wmOn"> Tempel logo ke foto</label>
@@ -395,16 +408,16 @@
         <button class="btn ghost" id="wmDel">Hapus</button>
       </div>
 
-      <hr class="setDiv">
-      <div class="setHead">📋 Log Foto</div>
+      </div></details>
+      <details class="setGrp"><summary>📋 Log Foto</summary><div class="setBody">
       <div class="setNote">Tiap foto kecatat (nama, waktu, koordinat, alamat). Ekspor ke Excel/CSV.
         Log lebih tua dari 30 hari otomatis dibersihkan.</div>
       <button class="btn ghost" id="csvBtn" style="width:100%;margin-top:8px">Ekspor Log CSV</button>
 
-      <hr class="setDiv">
       <pre id="lensDiag" hidden></pre>
 
-      <div class="setHead">🧹 Penyimpanan</div>
+      </div></details>
+      <details class="setGrp" id="grpStor"><summary>🧹 Penyimpanan</summary><div class="setBody">
       <div class="setNote" id="storInfo">Menghitung…</div>
       <div class="setNote" style="color:var(--ok)">Foto asli di Galeri HP (Pictures/SnapName) TIDAK ikut kehapus.</div>
       <div class="wmBtns">
@@ -412,13 +425,14 @@
         <button class="btn ghost" id="clrGal">Bersihkan Galeri Sesi</button>
       </div>
 
+      </div></details>
       <button class="btn save" id="wmClose" style="margin-top:14px">Selesai</button>
     </div>
   </div>
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v5.1</div>
+    <div id="startCredit">By Jova/Listira<br>v5.11</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -1049,10 +1063,15 @@ wmFile.addEventListener('change', e=>{
 });
 wmOn.addEventListener('change', ()=>localStorage.setItem('so_wm_on', wmOn.checked?'1':'0'));
 $('#setBtn').onclick  = ()=>{
-  wmModal.classList.add('open'); updateStorInfo();
-  setTimeout(renderWmEditor, 30);      // ukuran frame baru kebaca setelah modal tampil
+  wmModal.classList.add('open');
   pushModal(()=>wmModal.classList.remove('open'));
 };
+// grup Pengaturan cuma dihitung isinya pas dibuka (hemat & ukuran baru kebaca saat tampil)
+(function(){
+  const gw=$('#grpWm'), gs=$('#grpStor');
+  if(gw) gw.addEventListener('toggle', ()=>{ if(gw.open) setTimeout(renderWmEditor, 30); });
+  if(gs) gs.addEventListener('toggle', ()=>{ if(gs.open) updateStorInfo(); });
+})();
 
 /* ---------- info & bersihkan penyimpanan ---------- */
 function fmtKB(b){ return b>1048576 ? (b/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(b/1024))+' KB'; }
