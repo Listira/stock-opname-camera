@@ -156,6 +156,16 @@
   #wmPreview img{max-height:84px;max-width:90%}
   .wmRow{display:flex;align-items:center;gap:10px;font-size:14px;color:var(--txt);margin:10px 0}
   .wmRow input{width:18px;height:18px}
+  /* editor posisi & ukuran watermark */
+  #wmEditor{display:none}
+  #wmEditor.show{display:block}
+  #wmFrame{position:relative;width:100%;aspect-ratio:3/4;max-height:230px;margin:0 auto;
+    background:#0e1320 repeating-linear-gradient(45deg,#ffffff08 0 8px,transparent 8px 16px);
+    border:1.5px solid var(--line);border-radius:10px;overflow:hidden;touch-action:none}
+  #wmGhost{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    cursor:grab;touch-action:none;display:flex;align-items:center;justify-content:center;
+    outline:1.5px dashed #ffffff55;outline-offset:2px;border-radius:3px}
+  #wmGhost img{width:100%;height:100%;object-fit:contain;pointer-events:none;-webkit-user-drag:none}
   .wmBtns{display:flex;gap:10px;margin:14px 0}
   .wmCard .btn{padding:13px;font-size:15px}
   .btn.ghost{background:#2a3346}
@@ -199,8 +209,9 @@
   #galView .galBar{border-bottom:1px solid #ffffff22}
   #galDel{color:#ff7a7a}
   #galStage{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;
-    overflow:hidden;touch-action:pan-y}
-  #galImg{max-width:100%;max-height:100%;object-fit:contain;-webkit-user-drag:none;user-select:none}
+    overflow:hidden;touch-action:none}
+  #galImg{max-width:100%;max-height:100%;object-fit:contain;-webkit-user-drag:none;user-select:none;
+    transform-origin:center center;will-change:transform}
   #galName{color:#fff;padding:12px 16px;padding-bottom:max(12px,env(safe-area-inset-bottom));
     font-weight:600;text-align:center;word-break:break-all;font-size:14px}
   .galHint{color:var(--muted);font-size:11px;font-weight:400}
@@ -347,7 +358,24 @@
       <div class="setHead">🏷️ Watermark Logo</div>
       <div id="wmPreview">Belum ada logo</div>
       <label class="wmRow"><input type="checkbox" id="wmRemoveBg" checked> Hapus background otomatis</label>
-      <label class="wmRow"><input type="checkbox" id="wmOn"> Tampilkan di pojok kanan atas foto</label>
+      <label class="wmRow"><input type="checkbox" id="wmOn"> Tempel logo ke foto</label>
+      <div id="wmEditor">
+        <div class="setNote" style="margin:6px 0">Geser logo ke posisi yang diinginkan, atur ukurannya di bawah.</div>
+        <div id="wmFrame"><div id="wmGhost"><img id="wmGhostImg" alt=""></div></div>
+        <div class="wmRow" style="gap:8px">
+          <span style="font-size:12px;color:var(--muted)">Ukuran</span>
+          <input type="range" id="wmSize" min="4" max="45" step="1" value="18" style="flex:1;width:auto">
+          <b id="wmSizeVal" style="font-size:12px;min-width:34px;text-align:right">18%</b>
+        </div>
+        <div class="wmBtns" style="margin-top:2px">
+          <button class="btn ghost" id="wmPos1" style="font-size:12px">↖ Kiri atas</button>
+          <button class="btn ghost" id="wmPos2" style="font-size:12px">↗ Kanan atas</button>
+        </div>
+        <div class="wmBtns">
+          <button class="btn ghost" id="wmPos3" style="font-size:12px">↙ Kiri bawah</button>
+          <button class="btn ghost" id="wmPos4" style="font-size:12px">↘ Kanan bawah</button>
+        </div>
+      </div>
       <input type="file" id="wmFile" accept="image/*" hidden>
       <div class="wmBtns">
         <button class="btn ghost" id="wmPick">Pilih Logo</button>
@@ -377,7 +405,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v5.01</div>
+    <div id="startCredit">By Jova/Listira<br>v5.02</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -884,7 +912,81 @@ function processLogo(img, removeBgFlag){
 function renderWmPreview(){
   if(wmImg){ wmPreview.innerHTML=''; const c=wmImg.cloneNode(); wmPreview.appendChild(c); }
   else { wmPreview.textContent='Belum ada logo'; }
+  renderWmEditor();
 }
+
+/* ---------- editor posisi & ukuran logo (drag + slider) ---------- */
+const wmFrame=$('#wmFrame'), wmGhost=$('#wmGhost'), wmGhostImg=$('#wmGhostImg'),
+      wmSizeInp=$('#wmSize'), wmSizeVal=$('#wmSizeVal'), wmEditor=$('#wmEditor');
+function renderWmEditor(){
+  if(!wmEditor) return;
+  wmEditor.classList.toggle('show', !!wmImg);
+  if(!wmImg) return;
+  wmGhostImg.src = wmImg.src;
+  wmSizeInp.value = wmSizePct; wmSizeVal.textContent = wmSizePct+'%';
+  layoutGhost();
+}
+function layoutGhost(){
+  if(!wmImg || !wmFrame) return;
+  const fw=wmFrame.clientWidth, fh=wmFrame.clientHeight;
+  if(!fw || !fh) return;   // panel belum tampil -> jangan hitung (bagi nol bikin posisi rusak)
+  const iw=wmImg.naturalWidth||wmImg.width||1, ih=wmImg.naturalHeight||wmImg.height||1;
+  const gw=fw*(wmSizePct/100), gh=gw*ih/iw;
+  wmGhost.style.width=gw+'px'; wmGhost.style.height=gh+'px';
+  // clamp biar logo ga bisa ditaruh keluar frame
+  const hx=(gw/2)/fw, hy=(gh/2)/fh;
+  wmX=Math.max(hx,Math.min(1-hx,wmX)); wmY=Math.max(hy,Math.min(1-hy,wmY));
+  wmGhost.style.left=(wmX*fw)+'px'; wmGhost.style.top=(wmY*fh)+'px';
+}
+function saveWmPos(){
+  localStorage.setItem('so_wm_x', String(wmX));
+  localStorage.setItem('so_wm_y', String(wmY));
+  localStorage.setItem('so_wm_size', String(wmSizePct));
+}
+if(wmSizeInp){
+  wmSizeInp.addEventListener('input', ()=>{
+    wmSizePct=parseFloat(wmSizeInp.value)||18;
+    wmSizeVal.textContent=wmSizePct+'%';
+    layoutGhost(); saveWmPos();
+  });
+}
+if(wmGhost && wmFrame){
+  let drag=false, ox=0, oy=0;
+  const moveTo=(cx,cy)=>{
+    const r=wmFrame.getBoundingClientRect();
+    if(!r.width || !r.height) return;
+    wmX=((cx-r.left)-ox)/r.width;
+    wmY=((cy-r.top)-oy)/r.height;
+    layoutGhost();
+  };
+  const start=e=>{
+    const r=wmFrame.getBoundingClientRect();
+    if(!r.width) return;
+    drag=true;
+    ox=(e.clientX-r.left)-wmX*r.width; oy=(e.clientY-r.top)-wmY*r.height;
+    wmGhost.style.cursor='grabbing';
+    e.preventDefault(); e.stopPropagation();
+  };
+  // pendengar geser & lepas dipasang di DOKUMEN: jari/kursor boleh keluar dari
+  // kotak logo, dragnya tetap kebaca (kalau cuma di elemen, gampang lepas)
+  wmGhost.addEventListener('pointerdown', start);
+  // ketuk di area frame juga langsung mindahin logo ke titik itu
+  wmFrame.addEventListener('pointerdown', e=>{
+    if(e.target===wmGhost || wmGhost.contains(e.target)) return;
+    ox=0; oy=0; drag=true; wmGhost.style.cursor='grabbing';
+    moveTo(e.clientX, e.clientY); e.preventDefault();
+  });
+  document.addEventListener('pointermove', e=>{ if(drag) moveTo(e.clientX, e.clientY); });
+  const end=()=>{ if(drag){ drag=false; wmGhost.style.cursor='grab'; saveWmPos(); } };
+  document.addEventListener('pointerup', end);
+  document.addEventListener('pointercancel', end);
+}
+// tombol pojok cepat
+function setWmCorner(x,y){ wmX=x; wmY=y; layoutGhost(); saveWmPos(); showToast('Posisi logo diatur'); }
+if($('#wmPos1')) $('#wmPos1').onclick=()=>setWmCorner(0.12,0.09);
+if($('#wmPos2')) $('#wmPos2').onclick=()=>setWmCorner(0.88,0.09);
+if($('#wmPos3')) $('#wmPos3').onclick=()=>setWmCorner(0.12,0.91);
+if($('#wmPos4')) $('#wmPos4').onclick=()=>setWmCorner(0.88,0.91);
 function loadWmFromStore(){
   wmOn.checked = localStorage.getItem('so_wm_on')==='1';
   const data=localStorage.getItem('so_logo');
@@ -892,11 +994,22 @@ function loadWmFromStore(){
   else renderWmPreview();
 }
 // dipanggil saat capture (function declaration -> ke-hoist, aman dipakai shutter)
+// Posisi & ukuran logo diatur user (drag di Pengaturan). Disimpan sebagai
+// fraksi 0..1 dari lebar/tinggi foto -> hasilnya konsisten di resolusi apapun.
+let wmX = parseFloat(localStorage.getItem('so_wm_x'));
+let wmY = parseFloat(localStorage.getItem('so_wm_y'));
+let wmSizePct = parseFloat(localStorage.getItem('so_wm_size'));
+if(isNaN(wmX)) wmX=0.88;        // default: pojok kanan atas
+if(isNaN(wmY)) wmY=0.09;
+if(isNaN(wmSizePct)) wmSizePct=18;
+
 function drawWatermark(ctx, w, h){
   if(!wmOn.checked || !wmImg || !(wmImg.width||wmImg.naturalWidth)) return;
   const iw=wmImg.naturalWidth||wmImg.width, ih=wmImg.naturalHeight||wmImg.height;
-  const lw=Math.round(w*0.18), lh=Math.round(lw*ih/iw), m=Math.round(w*0.03);
-  ctx.drawImage(wmImg, w-lw-m, m, lw, lh);   // pojok kanan atas
+  const lw=Math.round(w*(wmSizePct/100)), lh=Math.round(lw*ih/iw);
+  let x=Math.round(wmX*w-lw/2), y=Math.round(wmY*h-lh/2);
+  x=Math.max(0,Math.min(w-lw,x)); y=Math.max(0,Math.min(h-lh,y));   // jangan keluar frame
+  ctx.drawImage(wmImg, x, y, lw, lh);
 }
 
 wmFile.addEventListener('change', e=>{
@@ -922,7 +1035,11 @@ wmFile.addEventListener('change', e=>{
   e.target.value='';
 });
 wmOn.addEventListener('change', ()=>localStorage.setItem('so_wm_on', wmOn.checked?'1':'0'));
-$('#setBtn').onclick  = ()=>{ wmModal.classList.add('open'); updateStorInfo(); pushModal(()=>wmModal.classList.remove('open')); };
+$('#setBtn').onclick  = ()=>{
+  wmModal.classList.add('open'); updateStorInfo();
+  setTimeout(renderWmEditor, 30);      // ukuran frame baru kebaca setelah modal tampil
+  pushModal(()=>wmModal.classList.remove('open'));
+};
 
 /* ---------- info & bersihkan penyimpanan ---------- */
 function fmtKB(b){ return b>1048576 ? (b/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(b/1024))+' KB'; }
@@ -1539,11 +1656,12 @@ function showView(i){
     viewUrl=URL.createObjectURL(g.thumb);  // fallback terakhir: thumbnail
     galImg.src=viewUrl;
   }
+  vReset(false);                       // ganti foto -> zoom balik normal
   galName.textContent=g.name;
-  galPos.innerHTML=(viewIdx+1)+' / '+galRecs.length+' <span class="galHint">geser ←→</span>';
+  galPos.innerHTML=(viewIdx+1)+' / '+galRecs.length+' <span class="galHint">geser ←→ · cubit zoom</span>';
 }
 function openLightbox(idx){ showView(idx); galView.classList.add('open'); pushModal(closeLightbox); }
-function closeLightbox(){ galView.classList.remove('open'); if(viewUrl){ URL.revokeObjectURL(viewUrl); viewUrl=null; } }
+function closeLightbox(){ vReset(false); galView.classList.remove('open'); if(viewUrl){ URL.revokeObjectURL(viewUrl); viewUrl=null; } }
 
 async function delCurrent(){
   if(!galRecs.length) return;
@@ -1560,14 +1678,81 @@ async function delCurrent(){
   showToast('Foto dihapus');
 }
 
-// swipe kiri/kanan di viewer
+/* ---------- viewer: cubit-zoom + geser + ketuk-dua-kali (kaya galeri HP) ---------- */
+let vz=1, vx=0, vy=0;                 // skala & geseran foto yang lagi dilihat
+const VZ_MAX=6;
+function vApply(){
+  galImg.style.transform='translate('+vx+'px,'+vy+'px) scale('+vz+')';
+  galImg.style.transition='';
+}
+function vReset(anim){
+  vz=1; vx=0; vy=0;
+  galImg.style.transition = anim ? 'transform .18s ease' : '';
+  galImg.style.transform='translate(0px,0px) scale(1)';
+}
+// batasi geseran biar foto ga lari keluar layar
+function vClamp(){
+  const r=galStage.getBoundingClientRect();
+  const iw=galImg.clientWidth*vz, ih=galImg.clientHeight*vz;
+  const mx=Math.max(0,(iw-r.width)/2), my=Math.max(0,(ih-r.height)/2);
+  vx=Math.min(mx,Math.max(-mx,vx)); vy=Math.min(my,Math.max(-my,vy));
+}
 (function(){
-  let x0=null;
-  galStage.addEventListener('touchstart',e=>{ x0=e.touches[0].clientX; },{passive:true});
-  galStage.addEventListener('touchend',e=>{
-    if(x0==null) return; const dx=e.changedTouches[0].clientX-x0; x0=null;
-    if(Math.abs(dx)>40) showView(viewIdx + (dx<0?1:-1));
-  },{passive:true});
+  const pts=new Map();
+  let d0=0, z0=1, px=0, py=0, sx=0, sy=0, mode='', lastTap=0, cx0=0, cy0=0;
+  const dist=()=>{ const a=[...pts.values()]; return Math.hypot(a[0].x-a[1].x, a[0].y-a[1].y); };
+  const mid =()=>{ const a=[...pts.values()]; return {x:(a[0].x+a[1].x)/2, y:(a[0].y+a[1].y)/2}; };
+
+  galStage.addEventListener('pointerdown', e=>{
+    pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pts.size===1){ mode = vz>1 ? 'pan' : 'swipe'; sx=e.clientX; sy=e.clientY; px=vx; py=vy; }
+    else if(pts.size===2){
+      mode='pinch'; d0=dist()||1; z0=vz;
+      const m=mid(); cx0=m.x; cy0=m.y; px=vx; py=vy;
+    }
+  });
+  galStage.addEventListener('pointermove', e=>{
+    if(!pts.has(e.pointerId)) return;
+    pts.get(e.pointerId).x=e.clientX; pts.get(e.pointerId).y=e.clientY;
+    if(mode==='pinch' && pts.size===2){
+      const m=mid();
+      vz=Math.min(VZ_MAX, Math.max(1, z0*(dist()/d0)));
+      vx=px+(m.x-cx0); vy=py+(m.y-cy0);          // ikut jari saat dicubit
+      vClamp(); vApply();
+    } else if(mode==='pan' && pts.size===1){
+      vx=px+(e.clientX-sx); vy=py+(e.clientY-sy);
+      vClamp(); vApply();
+    }
+  });
+  function up(e){
+    const wasSwipe = (mode==='swipe' && pts.size===1);
+    const dx = wasSwipe ? (e.clientX-sx) : 0, dy = wasSwipe ? (e.clientY-sy) : 0;
+    pts.delete(e.pointerId);
+    if(pts.size===0){
+      // geser kiri/kanan ganti foto HANYA kalau lagi ga di-zoom
+      if(wasSwipe && Math.abs(dx)>45 && Math.abs(dx)>Math.abs(dy)){
+        showView(viewIdx + (dx<0?1:-1));
+      } else if(wasSwipe && Math.abs(dx)<12 && Math.abs(dy)<12){
+        const now=Date.now();
+        if(now-lastTap<300){                      // ketuk dua kali = zoom / balik normal
+          if(vz>1) vReset(true);
+          else{
+            const r=galStage.getBoundingClientRect();
+            vz=2.5; vx=(r.width/2-(e.clientX-r.left))*1.5; vy=(r.height/2-(e.clientY-r.top))*1.5;
+            galImg.style.transition='transform .18s ease'; vClamp(); vApply();
+          }
+          lastTap=0;
+        } else lastTap=now;
+      }
+      if(vz<=1) vReset(false);
+      mode='';
+    } else if(pts.size===1){ // lepas 1 jari dari cubitan -> lanjut geser
+      const a=[...pts.values()][0]; mode = vz>1 ? 'pan' : 'swipe';
+      sx=a.x; sy=a.y; px=vx; py=vy;
+    }
+  }
+  galStage.addEventListener('pointerup', up);
+  galStage.addEventListener('pointercancel', e=>{ pts.delete(e.pointerId); if(!pts.size) mode=''; });
 })();
 
 // scroll mentok bawah -> render halaman berikutnya (galeri 1000 foto tetap enteng)
@@ -1696,10 +1881,24 @@ function suggestName(){
   // apalagi kalau ujung nama itu tanggal). Kalau nama sama, sistem (2)(3) yang urus.
   return lastName || '';
 }
+// Chip disisipkan TEPAT DI POSISI KURSOR (dulu selalu nempel di belakang —
+// bikin susah pas cuma mau ganti tanggal di depan nama). Kalau ada teks
+// yang lagi diblok, teks itu yang diganti.
 function appendChip(c){
-  nameInput.value = (nameInput.value + (nameInput.value?'_':'') + c).replace(/_+/g,'_');
+  const v=nameInput.value;
+  let a=nameInput.selectionStart, b=nameInput.selectionEnd;
+  if(a===null || a===undefined || document.activeElement!==nameInput){ a=b=v.length; }
+  const before=v.slice(0,a), after=v.slice(b);
+  const sepL = (before && !/_$/.test(before)) ? '_' : '';    // butuh '_' di kiri?
+  const sepR = (after  && !/^_/.test(after))  ? '_' : '';    // butuh '_' di kanan?
+  const ins  = sepL + c + sepR;
+  let val=(before + ins + after).replace(/_+/g,'_');
+  // hitung ulang posisi kursor: taruh persis setelah teks yang barusan disisipkan
+  let caret=(before + sepL + c).replace(/_+/g,'_').length;
+  nameInput.value=val;
   if(!sheetTags.includes(c)) sheetTags.push(c);
   nameInput.focus();
+  try{ nameInput.setSelectionRange(caret, caret); }catch(e){}
 }
 function buildChips(){
   const row=$('#suggestRow'); row.innerHTML='';
