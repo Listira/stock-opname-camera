@@ -111,7 +111,18 @@
   #mapsLink{display:none;margin-top:10px;color:#5aa9ff;font-size:14px;font-weight:600;
     text-decoration:none;align-items:center;gap:6px}
   #mapsLink.show{display:inline-flex}
-  #suggestRow{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  /* chip 1 BARIS yang bisa digeser — dulu flex-wrap: 14 chip = 5 baris (197px)
+     dan makin banyak makin ngedorong tombol Simpan, apalagi pas keyboard kebuka */
+  #suggestRow{display:flex;gap:8px;margin-top:12px;overflow-x:auto;overflow-y:hidden;
+    flex-wrap:nowrap;scrollbar-width:none;-webkit-overflow-scrolling:touch;padding-bottom:2px}
+  #suggestRow::-webkit-scrollbar{display:none}
+  .chip{flex:0 0 auto}
+  /* badge hasil scan QR di layar kamera */
+  #scanPill{position:absolute;left:50%;transform:translateX(-50%);top:74px;z-index:6;
+    background:#27c093e6;color:#04231b;font-weight:800;font-size:13px;
+    padding:7px 14px;border-radius:999px;display:none;max-width:82%;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #scanPill.show{display:block}
   .chip{background:#0e1320;border:1px solid var(--line);color:var(--txt);font-size:13px;
     padding:8px 12px;border-radius:999px}
   .chip:active{background:var(--accent)}
@@ -234,6 +245,7 @@
     <div id="focusRing"></div>
     <div id="gesture"></div>
     <div id="zoomInd"></div>
+    <div id="scanPill"></div>
     <div id="lensRow"></div>
     <div id="flash"></div>
     <div id="toast"></div>
@@ -245,6 +257,7 @@
         <div id="warnPill" class="pill warn"></div>
       </div>
       <div style="display:flex;gap:10px">
+        <button class="iconbtn" id="qrBtn" title="Scan QR/barcode aset">🔳</button>
         <button class="iconbtn" id="gpsBtn" title="Stempel lokasi GPS">📍</button>
         <button class="iconbtn" id="setBtn" title="Pengaturan">⚙️</button>
         <button class="iconbtn" id="torchBtn" title="Senter">🔦</button>
@@ -405,7 +418,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v5.02</div>
+    <div id="startCredit">By Jova/Listira<br>v5.1</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -1876,6 +1889,67 @@ async function nativeShutter(){
 }
 
 /* ---------- name sheet ---------- */
+/* ---------- SCAN QR / BARCODE ASET (v5.1) ----------
+   Nyala/mati lewat tombol 🔳 di atas. Saat nyala, kamera baca QR aset
+   terus-menerus; nomor terakhir dipakai buat NGISI BAGIAN BELAKANG nama.
+   Aturan penting: nomor yang DIISI APP diingat, jadi foto berikutnya
+   nomornya DIGANTI — bukan numpuk jadi _23232_232323. Kalau QR ga kebaca,
+   nomor lama dibuang biar aset B ga kelabelan nomor aset A. */
+let scanOn = localStorage.getItem('so_scan')==='1';
+let lastCode='', lastCodeTs=0, appliedCode='';
+const SCAN_FRESH_MS=15000;      // kode dianggap masih relevan selama 15 detik
+const qrBtn=$('#qrBtn'), scanPill=$('#scanPill');
+
+function scanAvailable(){ return !!(NC && NC.setScan); }
+function reflectScan(){
+  qrBtn.classList.toggle('on', scanOn);
+  qrBtn.style.display = scanAvailable() ? 'flex' : 'none';
+  if(!scanOn){ scanPill.classList.remove('show'); }
+}
+function setScan(on){
+  scanOn=!!on; localStorage.setItem('so_scan', scanOn?'1':'0');
+  try{ if(scanAvailable()) NC.setScan(scanOn); }catch(e){}
+  if(!scanOn){ lastCode=''; lastCodeTs=0; }
+  reflectScan();
+  showToast(scanOn ? '🔳 Scan QR aset: ON' : 'Scan QR aset: OFF');
+}
+qrBtn.onclick=()=>setScan(!scanOn);
+reflectScan();
+// nyalakan pemindai kalau setelannya ON dari pemakaian sebelumnya
+setTimeout(()=>{ try{ if(scanOn && scanAvailable()) NC.setScan(true); }catch(e){} }, 900);
+
+// dipanggil dari native tiap kode BARU kebaca
+window.__onScan=(code)=>{
+  if(!scanOn || !code) return;
+  lastCode=String(code).trim(); lastCodeTs=Date.now();
+  scanPill.textContent='🔳 '+lastCode;
+  scanPill.classList.add('show');
+  clearTimeout(window.__scanT);
+  window.__scanT=setTimeout(()=>scanPill.classList.remove('show'), 2500);
+  if(navigator.vibrate) try{ navigator.vibrate(20); }catch(e){}
+};
+
+// bersihin kode buat dipakai di nama file
+function sanitizeCode(c){
+  return String(c).replace(/[\\/:*?"<>|]+/g,'').replace(/\s+/g,'').slice(0,40);
+}
+// ambil kode yang masih segar (kalau basi -> dianggap ga ada)
+function freshCode(){
+  if(!scanOn || !lastCode) return '';
+  if(Date.now()-lastCodeTs > SCAN_FRESH_MS) return '';
+  return sanitizeCode(lastCode);
+}
+/** Tempel nomor aset ke BELAKANG nama: ganti nomor lama (yang app isi), bukan numpuk. */
+function applyCodeToName(name, code){
+  let base=name;
+  if(appliedCode){                                  // buang nomor yang tadi app isi
+    base=base.replace(new RegExp('_?'+appliedCode.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?=_|$)'), '');
+  }
+  base=base.replace(/_+/g,'_').replace(/^_+|_+$/g,'');
+  if(!code) return base;
+  return base ? base+'_'+code : code;
+}
+
 function suggestName(){
   // isi nama terakhir apa adanya — TANPA nambah angka otomatis (annoying,
   // apalagi kalau ujung nama itu tanggal). Kalau nama sama, sistem (2)(3) yang urus.
@@ -1904,7 +1978,9 @@ function buildChips(){
   const row=$('#suggestRow'); row.innerHTML='';
   const now=new Date();
   const stamp = ''+now.getFullYear()+String(now.getMonth()+1).padStart(2,'0')+String(now.getDate()).padStart(2,'0');  // 20260707 (tanpa strip)
-  const chips=[stamp, ...quickChips];   // chip tanggal (auto) + chip konfigurasi user
+  // chip: hasil scan QR (kalau ada) paling depan, lalu tanggal, lalu chip user
+  const fc=freshCode();
+  const chips=(fc?[fc]:[]).concat([stamp, ...quickChips]);
   chips.forEach(c=>{
     const b=document.createElement('button'); b.className='chip'; b.textContent='+ '+c;
     b.onclick=()=>appendChip(c);
@@ -1916,7 +1992,12 @@ function openSheet(){
   if(modalStack.indexOf(sheetSilentClose)<0) pushModal(sheetSilentClose);
   sheet.classList.add('open');
   sheetTags = [];
-  nameInput.value = suggestName();
+  // nama = template pemakaian sebelumnya, lalu nomor aset hasil scan ditempel
+  // di belakang (nomor lama diganti; kalau ga ada scan segar, nomor lama dibuang)
+  const code = freshCode();
+  nameInput.value = applyCodeToName(suggestName(), code);
+  appliedCode = code;
+  if(code && !sheetTags.includes(code)) sheetTags.push(code);
   buildChips();
   // tampilkan tombol Maps kalau foto ini punya titik GPS
   mapsLink.classList.toggle('show', !!shotPos);

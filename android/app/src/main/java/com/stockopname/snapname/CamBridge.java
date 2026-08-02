@@ -11,6 +11,7 @@ import androidx.camera.core.CameraControl;
 import androidx.camera.core.CameraInfo;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.FocusMeteringAction;
+import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageCapture;
 import androidx.camera.core.ImageCaptureException;
 import androidx.camera.core.ImageProxy;
@@ -97,7 +98,19 @@ public class CamBridge {
                                 ? CameraSelector.DEFAULT_BACK_CAMERA
                                 : CameraSelector.DEFAULT_FRONT_CAMERA;
 
-                        camera = provider.bindToLifecycle(owner, sel, preview, capture);
+                        // Pemindai QR/barcode jalan di jalur analisis terpisah — cuma di-bind
+                        // kalau fiturnya DINYALAKAN user (kalau mati: nol beban & nol baterai).
+                        analysis = null;
+                        if (scanOn) {
+                            analysis = new ImageAnalysis.Builder()
+                                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                                    .build();
+                            analysis.setAnalyzer(io, new BarcodeAnalyzer());
+                        }
+
+                        camera = (analysis != null)
+                                ? provider.bindToLifecycle(owner, sel, preview, capture, analysis)
+                                : provider.bindToLifecycle(owner, sel, preview, capture);
                         ready = true;
 
                         ZoomState zs = camera.getCameraInfo().getZoomState().getValue();
@@ -125,6 +138,82 @@ public class CamBridge {
 
     @JavascriptInterface
     public boolean isReady() { return ready; }
+
+    /* ================= SCAN QR / BARCODE ASET =================
+     * Jalan realtime dari aliran kamera (ImageAnalysis + ML Kit yang modelnya
+     * dibundel di APK -> OFFLINE penuh). Hasil terakhir disimpan di sini,
+     * JS tinggal ambil pas mau dipakai. Kalau fitur dimatikan, analyzer sama
+     * sekali ga di-bind: nol pemakaian CPU/baterai. */
+    private ImageAnalysis analysis;
+    private volatile boolean scanOn = false;
+    private volatile String lastCode = "";
+    private volatile long lastCodeAt = 0;
+
+    @JavascriptInterface
+    public void setScan(final boolean on) {
+        if (scanOn == on) return;
+        scanOn = on;
+        if (!on) { lastCode = ""; lastCodeAt = 0; }
+        act.runOnUiThread(new Runnable() { @Override public void run() { if (ready) bind(); } });
+    }
+
+    @JavascriptInterface
+    public boolean isScanOn() { return scanOn; }
+
+    /** Kode terakhir yang kebaca, format "kode|umurMillisecond"; "" kalau belum ada. */
+    @JavascriptInterface
+    public String lastScan() {
+        if (lastCode == null || lastCode.isEmpty()) return "";
+        return lastCode + "|" + (System.currentTimeMillis() - lastCodeAt);
+    }
+
+    @JavascriptInterface
+    public void clearScan() { lastCode = ""; lastCodeAt = 0; }
+
+    private class BarcodeAnalyzer implements ImageAnalysis.Analyzer {
+        private final com.google.mlkit.vision.barcode.BarcodeScanner sc =
+                com.google.mlkit.vision.barcode.BarcodeScanning.getClient(
+                        new com.google.mlkit.vision.barcode.BarcodeScannerOptions.Builder()
+                                .setBarcodeFormats(
+                                        com.google.mlkit.vision.barcode.common.Barcode.FORMAT_QR_CODE,
+                                        com.google.mlkit.vision.barcode.common.Barcode.FORMAT_CODE_128,
+                                        com.google.mlkit.vision.barcode.common.Barcode.FORMAT_CODE_39,
+                                        com.google.mlkit.vision.barcode.common.Barcode.FORMAT_EAN_13,
+                                        com.google.mlkit.vision.barcode.common.Barcode.FORMAT_DATA_MATRIX)
+                                .build());
+
+        @Override public void analyze(final ImageProxy proxy) {
+            android.media.Image mi = proxy.getImage();
+            if (mi == null || !scanOn) { proxy.close(); return; }
+            com.google.mlkit.vision.common.InputImage in =
+                    com.google.mlkit.vision.common.InputImage.fromMediaImage(
+                            mi, proxy.getImageInfo().getRotationDegrees());
+            sc.process(in)
+              .addOnSuccessListener(new com.google.android.gms.tasks.OnSuccessListener<java.util.List<com.google.mlkit.vision.barcode.common.Barcode>>() {
+                  @Override public void onSuccess(java.util.List<com.google.mlkit.vision.barcode.common.Barcode> list) {
+                      if (list != null && !list.isEmpty()) {
+                          String v = list.get(0).getRawValue();
+                          if (v != null && !v.trim().isEmpty()) {
+                              v = v.trim();
+                              boolean baru = !v.equals(lastCode);
+                              lastCode = v; lastCodeAt = System.currentTimeMillis();
+                              if (baru) runJs("window.__onScan && window.__onScan("
+                                      + jsStr(v) + ")");
+                          }
+                      }
+                      proxy.close();
+                  }
+              })
+              .addOnFailureListener(new com.google.android.gms.tasks.OnFailureListener() {
+                  @Override public void onFailure(Exception e) { proxy.close(); }
+              });
+        }
+    }
+
+    private static String jsStr(String s) {
+        return "'" + s.replace("\\", "\\\\").replace("'", "\\'")
+                      .replace("\n", " ").replace("\r", " ") + "'";
+    }
 
     /** Zoom OPTIK: di HP multi-lensa, sistem yang nuker lensa fisik sendiri. */
     @JavascriptInterface
