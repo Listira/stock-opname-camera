@@ -123,6 +123,7 @@
     padding:7px 14px;border-radius:999px;display:none;max-width:82%;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #scanPill.show{display:block}
+  #scanPill{pointer-events:auto;cursor:pointer}
   .chip{background:#0e1320;border:1px solid var(--line);color:var(--txt);font-size:13px;
     padding:8px 12px;border-radius:999px}
   .chip:active{background:var(--accent)}
@@ -432,7 +433,7 @@
 
   <!-- Start overlay -->
   <div id="start">
-    <div id="startCredit">By Jova/Listira<br>v5.11</div>
+    <div id="startCredit">By Jova/Listira<br>v5.12</div>
     <div class="logo">📷</div>
     <h1>Snap &amp; Name</h1>
     <p>Jepret aset → langsung kasih nama → simpan. Khusus stock opname biar ga ketuker file.<br><span style="color:var(--muted)">Cubit layar untuk zoom · ketuk untuk fokus</span></p>
@@ -1916,14 +1917,16 @@ async function nativeShutter(){
    nomor lama dibuang biar aset B ga kelabelan nomor aset A. */
 let scanOn = localStorage.getItem('so_scan')==='1';
 let lastCode='', lastCodeTs=0, appliedCode='';
-const SCAN_FRESH_MS=15000;      // kode dianggap masih relevan selama 15 detik
+// Nomor aset BERTAHAN sampai ada QR baru kebaca (dulu hangus setelah 15 detik —
+// salah, karena 1 aset sering difoto 2x: close-up QR + wide shot tanpa QR).
+// Dibuang cuma kalau: QR baru kebaca (diganti), atau user tap badge buat hapus.
 const qrBtn=$('#qrBtn'), scanPill=$('#scanPill');
 
 function scanAvailable(){ return !!(NC && NC.setScan); }
 function reflectScan(){
   qrBtn.classList.toggle('on', scanOn);
   qrBtn.style.display = scanAvailable() ? 'flex' : 'none';
-  if(!scanOn){ scanPill.classList.remove('show'); }
+  showScanPill();
 }
 function setScan(on){
   scanOn=!!on; localStorage.setItem('so_scan', scanOn?'1':'0');
@@ -1940,24 +1943,36 @@ setTimeout(()=>{ try{ if(scanOn && scanAvailable()) NC.setScan(true); }catch(e){
 // dipanggil dari native tiap kode BARU kebaca
 window.__onScan=(code)=>{
   if(!scanOn || !code) return;
-  lastCode=String(code).trim(); lastCodeTs=Date.now();
-  scanPill.textContent='🔳 '+lastCode;
-  scanPill.classList.add('show');
-  clearTimeout(window.__scanT);
-  window.__scanT=setTimeout(()=>scanPill.classList.remove('show'), 2500);
+  const c=String(code).trim();
+  const ganti = lastCode && c!==lastCode;
+  lastCode=c; lastCodeTs=Date.now();
+  showScanPill();                       // badge NETAP (bukan ilang 2.5 detik)
   if(navigator.vibrate) try{ navigator.vibrate(20); }catch(e){}
+  if(ganti) showToast('Nomor aset diganti: '+sanitizeCode(c));
 };
 
 // bersihin kode buat dipakai di nama file
 function sanitizeCode(c){
   return String(c).replace(/[\\/:*?"<>|]+/g,'').replace(/\s+/g,'').slice(0,40);
 }
-// ambil kode yang masih segar (kalau basi -> dianggap ga ada)
+// kode aset yang sedang aktif (bertahan sampai diganti QR baru / dihapus manual)
 function freshCode(){
   if(!scanOn || !lastCode) return '';
-  if(Date.now()-lastCodeTs > SCAN_FRESH_MS) return '';
   return sanitizeCode(lastCode);
 }
+// badge nomor aset tetap kelihatan selama nomornya masih dipakai; tap = hapus
+function showScanPill(){
+  if(scanOn && lastCode){
+    scanPill.innerHTML='🔳 '+sanitizeCode(lastCode)+' <span style="opacity:.65;font-weight:600">✕</span>';
+    scanPill.classList.add('show');
+  } else scanPill.classList.remove('show');
+}
+scanPill.onclick=()=>{
+  if(!lastCode) return;
+  lastCode=''; lastCodeTs=0;
+  try{ if(scanAvailable()) NC.clearScan(); }catch(e){}
+  showScanPill(); showToast('Nomor aset dihapus');
+};
 /** Tempel nomor aset ke BELAKANG nama: ganti nomor lama (yang app isi), bukan numpuk. */
 function applyCodeToName(name, code){
   let base=name;
@@ -1977,10 +1992,21 @@ function suggestName(){
 // Chip disisipkan TEPAT DI POSISI KURSOR (dulu selalu nempel di belakang —
 // bikin susah pas cuma mau ganti tanggal di depan nama). Kalau ada teks
 // yang lagi diblok, teks itu yang diganti.
+// posisi kursor terakhir di kolom nama — dicatat terus, karena pas tombol chip
+// ditekan kolomnya bisa kehilangan fokus dan posisi kursornya ikut hilang
+let lastCaret=null;
+['keyup','click','select','focus','input'].forEach(ev=>{
+  nameInput.addEventListener(ev, ()=>{ lastCaret=[nameInput.selectionStart, nameInput.selectionEnd]; });
+});
+nameInput.addEventListener('blur', ()=>{ lastCaret=[nameInput.selectionStart, nameInput.selectionEnd]; });
+
 function appendChip(c){
   const v=nameInput.value;
   let a=nameInput.selectionStart, b=nameInput.selectionEnd;
-  if(a===null || a===undefined || document.activeElement!==nameInput){ a=b=v.length; }
+  const fokus = document.activeElement===nameInput;
+  if(!fokus && lastCaret){ a=lastCaret[0]; b=lastCaret[1]; }      // pakai posisi terakhir
+  if(a===null || a===undefined || a>v.length){ a=b=v.length; }
+  if(b===null || b===undefined || b<a || b>v.length) b=a;
   const before=v.slice(0,a), after=v.slice(b);
   const sepL = (before && !/_$/.test(before)) ? '_' : '';    // butuh '_' di kiri?
   const sepR = (after  && !/^_/.test(after))  ? '_' : '';    // butuh '_' di kanan?
@@ -1992,6 +2018,7 @@ function appendChip(c){
   if(!sheetTags.includes(c)) sheetTags.push(c);
   nameInput.focus();
   try{ nameInput.setSelectionRange(caret, caret); }catch(e){}
+  lastCaret=[caret, caret];
 }
 function buildChips(){
   const row=$('#suggestRow'); row.innerHTML='';
@@ -2002,6 +2029,11 @@ function buildChips(){
   const chips=(fc?[fc]:[]).concat([stamp, ...quickChips]);
   chips.forEach(c=>{
     const b=document.createElement('button'); b.className='chip'; b.textContent='+ '+c;
+    b.type='button';
+    // JANGAN biarkan tombol chip nyuri fokus dari kolom nama — kalau fokus lepas,
+    // posisi kursor ikut hilang dan chip-nya jatuh nempel di paling belakang
+    b.addEventListener('pointerdown', e=>e.preventDefault());
+    b.addEventListener('mousedown',  e=>e.preventDefault());
     b.onclick=()=>appendChip(c);
     row.appendChild(b);
   });
